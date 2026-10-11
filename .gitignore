@@ -1,0 +1,56 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+node_modules
+dist
+dist-ssr
+*.local
+
+# Editor directories and files
+.vscode
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# Local credentials, generated release overlay and build artifacts
+.env
+.env.*
+!.env.example
+*.key
+*.cswf
+src-tauri/target/
+src-tauri/tauri.release.conf.json
+
+.tools/
+dependency-licenses.json
+npm-audit.json
+rust-audit.json
+
+# Local reports and handoff notes
+/.runtime/
+/reports/
+*.tmp
+*.bak
+*.tsbuildinfo
+
+# Generated notices are rebuilt for each target; keep the resource placeholder
+/src-tauri/resources/third-party/inventory.json
+/src-tauri/resources/third-party/THIRD-PARTY-NOTICES.txt
+
+# This application ships desktop installers only
+/src-tauri/icons/android/
+/src-tauri/icons/ios/
+
+# Private platform signing material
+*.p12
+*.pfx

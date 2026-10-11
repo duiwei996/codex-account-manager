@@ -1,0 +1,52 @@
+{
+  "name": "codex-switcher",
+  "private": true,
+  "version": "1.0.0",
+  "description": "A multi-account manager for Codex CLI",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "test:desktop-reopen": "node --experimental-strip-types --test tests/desktopReopen.test.ts",
+    "test:browser-runtime": "node --experimental-strip-types --test tests/browserRuntime.test.ts",
+    "test:reset-credits": "node --experimental-strip-types --test tests/resetCredits.test.ts",
+    "test:updater": "node --experimental-strip-types --test tests/updateInstallation.test.ts tests/updaterToolchain.test.ts",
+    "preview": "vite preview",
+    "tauri": "sh ./scripts/tauri.sh",
+    "tauri:win": "tauri",
+    "lan": "pnpm build && cargo run --manifest-path src-tauri/Cargo.toml --bin codex-web",
+    "version:bump": "node scripts/bump-version.mjs",
+    "version:patch": "node scripts/bump-version.mjs patch",
+    "version:minor": "node scripts/bump-version.mjs minor",
+    "version:major": "node scripts/bump-version.mjs major",
+    "test": "node --experimental-strip-types --test tests/*.test.*",
+    "licenses:generate": "node scripts/generate-third-party-notices.mjs",
+    "release:verify": "node scripts/verify-release.mjs"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2.12.2",
+    "@tauri-apps/plugin-dialog": "^2.8.1",
+    "@tauri-apps/plugin-opener": "^2.7.0",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.13.2",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@tauri-apps/cli": "^2.12.1",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^6.1.2",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~7.0.2",
+    "vite": "^8.3.4"
+  },
+  "packageManager": "pnpm@10.18.3",
+  "engines": {
+    "node": ">=22.12.0 <23",
+    "pnpm": "10.18.3"
+  },
+  "license": "MIT",
+  "author": "duiwei"
+}

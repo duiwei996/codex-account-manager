@@ -1,0 +1,51 @@
+[package]
+name = "codex-switcher"
+version = "1.0.0"
+description = "A multi-account manager for Codex CLI"
+authors = ["duiwei"]
+license = "MIT"
+edition = "2021"
+default-run = "codex-switcher"
+
+[lib]
+name = "codex_switcher_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2.10", features = ["tray-icon", "macos-private-api"] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2.6"
+tauri-plugin-process = "2"
+tauri-plugin-updater = "2.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+dirs = "6"
+tiny_http = "0.12"
+axum = "0.8"
+webbrowser = "1"
+base64 = "0.22"
+sha2 = "0.10"
+rand = "0.9"
+thiserror = "2"
+anyhow = "1"
+urlencoding = "2"
+futures = "0.3"
+url = "2"
+chacha20poly1305 = "0.10"
+tempfile = "3"
+fs2 = "0.4"
+zeroize = "1"
+keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sync-secret-service", "crypto-rust"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+plist = "1"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Registry", "Win32_System_Threading"] }

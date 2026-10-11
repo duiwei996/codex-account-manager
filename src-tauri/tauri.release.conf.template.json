@@ -1,0 +1,13 @@
+{
+  "bundle": {
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "__TAURI_UPDATER_PUBLIC_KEY__",
+      "endpoints": [
+        "https://github.com/duiwei996/codex-account-manager/releases/latest/download/latest.json"
+      ]
+    }
+  }
+}
