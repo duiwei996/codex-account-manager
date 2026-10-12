@@ -23,7 +23,11 @@ Open the [releases page](https://github.com/duiwei996/codex-account-manager/rele
 
 If your operating system displays a security prompt, confirm that the installer came from this repository's releases page.
 
-macOS installers use ad-hoc signing and are not notarized by Apple. On first launch, you may need to click Open Anyway in System Settings → Privacy & Security. If that option is unavailable or the app still reports that it is damaged, report your macOS version and installer filename.
+macOS installers use ad-hoc signing and are not notarized by Apple. If the first launch shows a warning that Apple cannot verify whether the app contains malware, confirm that the installer came from this repository and follow these steps:
+
+1. Click Done in the warning.
+2. Open System Settings → Privacy & Security, scroll to the blocked app notice, and click Open Anyway.
+3. Confirm as prompted and click Open. macOS saves the exception for this app.
 
 ## Usage
 
