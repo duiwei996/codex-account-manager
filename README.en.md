@@ -23,6 +23,8 @@ Open the [releases page](https://github.com/duiwei996/codex-account-manager/rele
 
 If your operating system displays a security prompt, confirm that the installer came from this repository's releases page.
 
+macOS installers use ad-hoc signing and are not notarized by Apple. On first launch, you may need to click Open Anyway in System Settings → Privacy & Security. If that option is unavailable or the app still reports that it is damaged, report your macOS version and installer filename.
+
 ## Usage
 
 1. Open the app and add an account by signing in through your browser or importing an existing `auth.json`.
