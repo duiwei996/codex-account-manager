@@ -2,48 +2,39 @@ import { localizeError } from "../lib/errors";
 import { tr, useLocale } from "../lib/i18n";
 import { useState } from "react";
 import {
-  describeFileSource,
   isTauriRuntime,
   openExternalUrl,
-  pickAuthJsonFile,
-  type FileSource,
 } from "../lib/platform";
 
 interface AddAccountModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onImportFile: (source: FileSource, name: string) => Promise<void>;
   onStartOAuth: (name: string) => Promise<{ auth_url: string }>;
   onCompleteOAuth: () => Promise<unknown>;
   onCancelOAuth: () => Promise<void>;
 }
 
-type Tab = "oauth" | "import";
 
 export function AddAccountModal({
   isOpen,
   onClose,
-  onImportFile,
   onStartOAuth,
   onCompleteOAuth,
   onCancelOAuth,
 }: AddAccountModalProps) {
   const locale = useLocale();
   const t = (text: string) => tr(text, locale);
-  const [activeTab, setActiveTab] = useState<Tab>("oauth");
   const [name, setName] = useState("");
-  const [fileSource, setFileSource] = useState<FileSource | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [oauthPending, setOauthPending] = useState(false);
   const [authUrl, setAuthUrl] = useState<string>("");
   const [copied, setCopied] = useState<boolean>(false);
-  const isPrimaryDisabled = loading || (activeTab === "oauth" && oauthPending);
+  const isPrimaryDisabled = loading || oauthPending;
   const tauriRuntime = isTauriRuntime();
 
   const resetForm = () => {
     setName("");
-    setFileSource(null);
     setError(null);
     setLoading(false);
     setOauthPending(false);
@@ -67,6 +58,9 @@ export function AddAccountModal({
       setOauthPending(true);
       setLoading(false);
 
+      // Open only after the user clicks Login. Keep the link for manual retry.
+      void openExternalUrl(info.auth_url).catch(() => setError(t("Please open the following link in your browser to proceed:")));
+
       // Wait for completion
       await onCompleteOAuth();
       handleClose();
@@ -74,32 +68,6 @@ export function AddAccountModal({
       setError(err instanceof Error ? err.message : String(err));
       setLoading(false);
       setOauthPending(false);
-    }
-  };
-
-  const handleSelectFile = async () => {
-    try {
-      const selected = await pickAuthJsonFile();
-      if (selected) setFileSource(selected);
-    } catch (err) {
-      console.error(t("Failed to open file dialog:"), err);
-    }
-  };
-
-  const handleImportFile = async () => {
-    if (!fileSource) {
-      setError(t("Please select an auth.json file"));
-      return;
-    }
-
-    try {
-      setLoading(true);
-      setError(null);
-      await onImportFile(fileSource, name.trim());
-      handleClose();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      setLoading(false);
     }
   };
 
@@ -119,32 +87,6 @@ export function AddAccountModal({
           </button>
         </div>
 
-        {/* Tabs */}
-        <div className="flex border-b border-gray-100 dark:border-gray-800">
-          {(["oauth", "import"] as Tab[]).map((tab) => (
-            <button
-              key={tab}
-              onClick={() => {
-                if (tab === "import" && oauthPending) {
-                  void onCancelOAuth().catch((err) => {
-                    console.error("Failed to cancel login:", err);
-                  });
-                  setOauthPending(false);
-                  setLoading(false);
-                }
-                setActiveTab(tab);
-                setError(null);
-              }}
-              className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${activeTab === tab
-                  ? "text-gray-900 dark:text-gray-100 border-b-2 border-gray-900 dark:border-gray-100 -mb-px"
-                  : "text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300"
-                }`}
-            >
-              {tab === "oauth" ? t("ChatGPT Login") : t("Import File")}
-            </button>
-          ))}
-        </div>
-
         {/* Content */}
         <div className="p-5 space-y-4">
           {/* Account name is optional; the backend derives one when blank. */}
@@ -162,7 +104,7 @@ export function AddAccountModal({
           </div>
 
           {/* Tab-specific content */}
-          {activeTab === "oauth" && (
+          {(
             <div className="text-sm text-gray-500 dark:text-gray-400">
               {oauthPending ? (
                 <div className="text-center py-4">
@@ -215,31 +157,9 @@ export function AddAccountModal({
                 </div>
               ) : (
                 <p>
-                  {t("Click the button below to generate a login link. You will need to open it in your browser to authenticate.")}
+                  {t("Click Login to open your browser and authenticate.")}
                 </p>
               )}
-            </div>
-          )}
-
-          {activeTab === "import" && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                {t("Select auth.json file")}
-              </label>
-              <div className="flex gap-2">
-                <div className="flex-1 px-4 py-2.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg text-sm text-gray-600 dark:text-gray-300 truncate">
-                  {describeFileSource(fileSource)}
-                </div>
-                <button
-                  onClick={handleSelectFile}
-                  className="px-4 py-2.5 bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700 rounded-lg text-sm font-medium text-gray-700 dark:text-gray-200 transition-colors whitespace-nowrap"
-                >
-                  {t("Browse...")}
-                </button>
-              </div>
-              <p className="text-xs text-gray-400 dark:text-gray-500 mt-2">
-                {t("Import credentials from an existing Codex auth.json file")}
-              </p>
             </div>
           )}
 
@@ -260,15 +180,11 @@ export function AddAccountModal({
             {t("Cancel")}
           </button>
           <button
-            onClick={activeTab === "oauth" ? handleOAuthLogin : handleImportFile}
+            onClick={handleOAuthLogin}
             disabled={isPrimaryDisabled}
             className="flex-1 px-4 py-2.5 text-sm font-medium rounded-lg bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-gray-200 text-white dark:text-gray-900 transition-colors disabled:opacity-50"
           >
-            {loading
-              ? "Adding..."
-              : activeTab === "oauth"
-                ? t("Generate Login Link")
-                : "Import"}
+            {loading ? t("Adding...") : t("ChatGPT Login")}
           </button>
         </div>
       </div>

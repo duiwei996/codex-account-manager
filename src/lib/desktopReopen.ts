@@ -1,11 +1,3 @@
-export type DesktopReopenPreference = "ask" | "always" | "never";
-
-export const DESKTOP_REOPEN_STORAGE_KEY = "desktop-reopen-after-force-close";
-
-export function parseDesktopReopenPreference(value: string | null): DesktopReopenPreference {
-  return value === "always" || value === "never" ? value : "ask";
-}
-
 export interface ForceCloseOutcome {
   canSwitch: boolean;
   reopenToken: string | null;

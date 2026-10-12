@@ -1,3 +1,4 @@
+import { ActionIcon } from "./components/ActionIcon";
 import { localizeError } from "./lib/errors";
 import { getLocale, tr, useLocale } from "./lib/i18n";
 import { useCallback, useEffect, useState } from "react";
@@ -296,6 +297,9 @@ function TrayMenu() {
   // Reload when the tray is reopened or accounts change elsewhere.
   useEffect(() => {
     if (!isTauriRuntime()) return;
+    // The popup can open before event listeners finish registering.
+    void load();
+    let disposed = false;
     let unlistenRefresh: (() => void) | undefined;
     let unlistenChanged: (() => void) | undefined;
     let unlistenTheme: (() => void) | undefined;
@@ -322,9 +326,19 @@ function TrayMenu() {
           }
         }
       );
-    })();
+    })().catch((err) => {
+      if (!disposed) setError(formatError(err));
+    }).finally(() => {
+      if (disposed) {
+        unlistenRefresh?.();
+        unlistenChanged?.();
+        unlistenTheme?.();
+        unlistenAutoWarmup?.();
+      }
+    });
 
     return () => {
+      disposed = true;
       unlistenRefresh?.();
       unlistenChanged?.();
       unlistenTheme?.();
@@ -366,32 +380,32 @@ function TrayMenu() {
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden rounded-xl border border-gray-200 bg-white text-gray-900 shadow-2xl dark:border-gray-700 dark:bg-gray-900 dark:text-gray-100">
-      <div className="flex items-center gap-2 border-b border-gray-100 px-3 py-2 dark:border-gray-800">
-        <div className="flex h-6 w-6 items-center justify-center rounded-md bg-black text-xs font-bold text-white">
-          C
-        </div>
-        <span className="text-sm font-semibold">{t("Codex Account Manager")}</span>
+      <div className="flex flex-nowrap items-center gap-1.5 border-b border-gray-100 px-2.5 py-2 dark:border-gray-800">
+        <img src="/icon.png" alt="" className="h-6 w-6 shrink-0" />
+        <span className="min-w-0 flex-1 truncate whitespace-nowrap text-[13px] font-semibold" title={t("Codex Account Manager")}>{t("Codex Account Manager")}</span>
         <button
           onClick={() => void handleAutoWarmupToggle()}
           disabled={accounts.length === 0}
+          aria-label={t("Auto Warm Up")}
+          aria-pressed={autoWarmupAllEnabled}
           title={
             autoWarmupAllEnabled
               ? t("Disable auto warm-up for all accounts")
               : t("Enable auto warm-up for all accounts")
           }
-          className={`ml-auto rounded-md px-2 py-1 text-[11px] font-semibold transition-colors disabled:opacity-50 ${
+          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors disabled:opacity-50 ${
             autoWarmupAllEnabled
               ? "bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-900/20 dark:text-emerald-300 dark:hover:bg-emerald-900/30"
               : "bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
           }`}
         >
-          {t(autoWarmupAllEnabled ? "Auto: on" : "Auto: off")}
+          <ActionIcon name="auto" />
         </button>
         <button
           onClick={() => void handleRefresh()}
           disabled={refreshing}
           title={t("Refresh usage")}
-          className="flex h-6 w-6 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-900 disabled:opacity-50 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-gray-100"
         >
           <span className={`text-base leading-none ${refreshing ? "inline-block animate-spin" : ""}`}>
             ↻

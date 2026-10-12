@@ -8,7 +8,7 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use crate::{
     auth::{load_app_settings, update_app_settings},
-    types::{DockDisplayMode, TrayDisplayMode, UsageInfo},
+    types::{AccountSwitchMode, DockDisplayMode, TrayDisplayMode, UsageInfo},
 };
 
 /// Label of the borderless tray popup window.
@@ -126,6 +126,7 @@ pub fn quit_app(app: AppHandle) {
 
 #[derive(serde::Serialize)]
 pub struct DisplaySettings {
+    account_switch_mode: AccountSwitchMode,
     tray_display_mode: TrayDisplayMode,
     dock_display_mode: Option<DockDisplayMode>,
 }
@@ -134,6 +135,7 @@ pub struct DisplaySettings {
 pub fn get_display_settings() -> Result<DisplaySettings, String> {
     let settings = load_app_settings().map_err(|error| error.to_string())?;
     Ok(DisplaySettings {
+        account_switch_mode: settings.account_switch_mode,
         tray_display_mode: settings.tray_display_mode,
         dock_display_mode: if cfg!(target_os = "macos") {
             Some(settings.dock_display_mode)
@@ -141,6 +143,15 @@ pub fn get_display_settings() -> Result<DisplaySettings, String> {
             None
         },
     })
+}
+
+#[tauri::command]
+pub fn set_account_switch_mode(mode: AccountSwitchMode) -> Result<(), String> {
+    update_app_settings(|settings| {
+        settings.account_switch_mode = mode;
+        Ok(())
+    })
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]

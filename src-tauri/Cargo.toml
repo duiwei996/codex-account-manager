@@ -1,6 +1,6 @@
 [package]
 name = "codex-switcher"
-version = "1.0.0"
+version = "1.0.1"
 description = "A multi-account manager for Codex CLI"
 authors = ["duiwei"]
 license = "MIT"
@@ -48,4 +48,7 @@ keyring = { version = "3.6.3", features = ["apple-native", "windows-native", "sy
 plist = "1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Registry", "Win32_System_Threading"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_System_Registry", "Win32_System_Threading", "Win32_UI_Shell"] }
+
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
+tauri-plugin-single-instance = "2"

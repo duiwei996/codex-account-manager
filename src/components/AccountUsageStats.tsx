@@ -1,3 +1,4 @@
+import { CenteredSelect } from "./CenteredSelect";
 import { createPortal } from "react-dom";
 import { ActionIcon } from "./ActionIcon";
 import { localizeError } from "../lib/errors";
@@ -190,7 +191,7 @@ function TokenActivity({ daily }: { daily: AccountDailyUsage[] }) {
         <span className="font-medium text-gray-600 dark:text-gray-300">{t("Token activity")}</span>
         <div className="flex items-center gap-2">
           <span className="text-gray-400 dark:text-gray-500">{t(activityRangeLabel(range))}</span>
-          <select
+          <CenteredSelect
             value={range}
             onChange={(event) => {
               const value = event.target.value;
@@ -204,7 +205,7 @@ function TokenActivity({ daily }: { daily: AccountDailyUsage[] }) {
                 {t(option.label)}
               </option>
             ))}
-          </select>
+          </CenteredSelect>
         </div>
       </div>
       <div

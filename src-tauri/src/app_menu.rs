@@ -277,11 +277,7 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>, settings: &AppSettings) -> tauri::
     let desktop_reopen_settings = MenuItem::with_id(
         app,
         DESKTOP_REOPEN_SETTINGS_ID,
-        localized(
-            zh,
-            "Reopen Codex after force close...",
-            "强制关闭后重新打开 Codex…",
-        ),
+        localized(zh, "Account switching...", "账号切换方式…"),
         cfg!(any(target_os = "macos", windows)),
         None::<&str>,
     )?;

@@ -1,25 +1,39 @@
+import { CenteredSelect } from "./CenteredSelect";
 import { localizeError } from "../lib/errors";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { DesktopReopenPreference } from "../lib/desktopReopen";
 import { invokeBackend, isTauriRuntime } from "../lib/platform";
 import type { DockDisplayMode } from "../types";
 import { setLocale, tr, useLocale } from "../lib/i18n";
+import { normalizeTimedWarmupTimes } from "../lib/autoWarmup";
+import type { ThemeMode } from "../lib/theme";
 
 type TrayDisplayMode = "icon_and_session" | "active_usage_text" | "hidden";
 interface DisplaySettings {
+  account_switch_mode: "direct" | "force_close";
   tray_display_mode: TrayDisplayMode;
   dock_display_mode: DockDisplayMode | null;
 }
 
 interface SettingsModalProps {
-  reopenPreference: DesktopReopenPreference;
-  onReopenPreferenceChange: (value: DesktopReopenPreference) => void;
+  theme: ThemeMode;
+  onThemeChange: (theme: ThemeMode) => void;
+  autoWarmupEnabled: boolean;
+  autoWarmupLabel: string;
+  onAutoWarmupChange: (enabled: boolean) => void;
+  warmupAvailable: boolean;
+  timedWarmupEnabled: boolean;
+  timedWarmupTimes: string[];
+  timedWarmupLabel: string;
+  onTimedWarmupChange: (enabled: boolean) => void;
+  onTimedWarmupTimesChange: (times: string[]) => void;
   onClose: () => void;
 }
 
 export function SettingsModal({
-  reopenPreference,
-  onReopenPreferenceChange,
+  theme, onThemeChange,
+  autoWarmupEnabled, autoWarmupLabel, onAutoWarmupChange, warmupAvailable,
+  timedWarmupEnabled, timedWarmupTimes, timedWarmupLabel,
+  onTimedWarmupChange, onTimedWarmupTimesChange,
   onClose,
 }: SettingsModalProps) {
   const locale = useLocale();
@@ -27,6 +41,7 @@ export function SettingsModal({
   const [displaySettings, setDisplaySettings] = useState<DisplaySettings | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [timeDraft, setTimeDraft] = useState("");
   const requestId = useRef(0);
   const desktop = isTauriRuntime();
   const loadDisplaySettings = useCallback(async () => {
@@ -43,7 +58,7 @@ export function SettingsModal({
   }, []);
 
   useEffect(() => {
-    if (!desktop) return;
+    if (!desktop) { void loadDisplaySettings(); return; }
     let disposed = false;
     let unlisten: (() => void) | undefined;
     void import("@tauri-apps/api/event").then(async ({ listen }) => {
@@ -80,72 +95,107 @@ export function SettingsModal({
     }
   };
 
-  const selectClassName = "w-full rounded-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-3 py-2 text-sm text-gray-900 dark:text-gray-100 disabled:opacity-50";
+  const selectClassName = "w-48 max-w-[60%] shrink-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100 disabled:opacity-50";
+  const rowClassName = "flex items-center justify-between gap-4 py-3";
+  const labelClassName = "text-sm font-medium text-gray-900 dark:text-gray-100";
+  const addTime = () => {
+    const normalized = normalizeTimedWarmupTimes([timeDraft]);
+    if (!normalized.length) return;
+    onTimedWarmupTimesChange(normalizeTimedWarmupTimes([...timedWarmupTimes, ...normalized]));
+    setTimeDraft("");
+  };
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div role="dialog" aria-modal="true" aria-labelledby="settings-title" className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl w-full max-w-md mx-4 shadow-xl">
-        <div className="p-5 border-b border-gray-100 dark:border-gray-800">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div role="dialog" aria-modal="true" aria-labelledby="settings-title" className="flex max-h-[90vh] w-full max-w-lg flex-col rounded-2xl border border-gray-200 bg-white shadow-xl dark:border-gray-700 dark:bg-gray-900">
+        <div className="flex shrink-0 items-center justify-between border-b border-gray-100 p-5 dark:border-gray-800">
           <h2 id="settings-title" className="text-lg font-semibold text-gray-900 dark:text-gray-100">{translate("Settings")}</h2>
+          <button onClick={onClose} disabled={saving} aria-label={translate("Close")} className="rounded-lg px-2 py-1 text-gray-400 hover:bg-gray-100 disabled:opacity-50 dark:hover:bg-gray-800">✕</button>
         </div>
-        <div className="p-5 space-y-3 max-h-[65vh] overflow-y-auto">
-          <label htmlFor="app-language" className="block text-sm font-medium text-gray-900 dark:text-gray-100">{translate("Language")}</label>
-          <select id="app-language" value={locale} onChange={(event) => setLocale(event.target.value as "zh-CN" | "en-US")} className={selectClassName}>
-            <option value="zh-CN">{translate("Simplified Chinese")}</option>
-            <option value="en-US">{translate("English")}</option>
-          </select>
-          <div className="border-t border-gray-100 dark:border-gray-800" />
-          {desktop && (
-            <>
-              {displaySettings ? (
-                <>
-                  <label htmlFor="tray-display-mode" className="block text-sm font-medium text-gray-900 dark:text-gray-100">{translate("Tray")}</label>
-                  <select
-                    id="tray-display-mode"
-                    value={displaySettings.tray_display_mode}
-                    disabled={saving}
-                    onChange={(event) => void changeDisplaySetting("set_tray_display_mode", event.target.value)}
-                    className={selectClassName}
-                  >
-                    <option value="icon_and_session">{translate("Icon + Session")}</option>
-                    <option value="active_usage_text">{translate("Hourly + Weekly")}</option>
-                    <option value="hidden">{translate("Hidden")}</option>
-                  </select>
-                  {displaySettings.dock_display_mode !== null && (
-                    <>
-                      <label htmlFor="dock-display-mode" className="block text-sm font-medium text-gray-900 dark:text-gray-100">{translate("Dock Icon")}</label>
-                      <select
-                        id="dock-display-mode"
-                        value={displaySettings.dock_display_mode}
-                        disabled={saving}
-                        onChange={(event) => void changeDisplaySetting("set_dock_display_mode", event.target.value)}
-                        className={selectClassName}
-                      >
-                        <option value="show_in_dock">{translate("Show in Dock")}</option>
-                        <option value="menu_bar_only">{translate("Menu Bar Only")}</option>
-                      </select>
-                      <p className="text-xs text-gray-500 dark:text-gray-400">{translate("At least one of the Dock or tray icons stays visible so you can reopen Codex Account Manager.")}</p>
-                    </>
-                  )}
-                </>
-              ) : !error && <p className="text-sm text-gray-500 dark:text-gray-400">{translate("Loading display settings...")}</p>}
-              {error && <p role="alert" className="text-sm text-red-600 dark:text-red-300">{translate("Could not update display settings")}: {localizeError(error)}</p>}
-              <div className="border-t border-gray-100 dark:border-gray-800" />
-            </>
-          )}
-          <label htmlFor="desktop-reopen-preference" className="block text-sm font-medium text-gray-900 dark:text-gray-100">
-            {translate("Reopen Codex after close")}
-          </label>
-          <select id="desktop-reopen-preference" value={reopenPreference === "ask" ? "never" : reopenPreference} onChange={(event) => onReopenPreferenceChange(event.target.value as DesktopReopenPreference)} className={selectClassName}>
-            <option value="always">{translate("Reopen desktop app")}</option>
-            <option value="never">{translate("Keep closed")}</option>
-          </select>
-          <p className="text-sm text-gray-500 dark:text-gray-400">
-            {translate("Applies to detected Codex desktop apps on macOS and Windows. When switching accounts, the app reopens after the switch succeeds.")}
-          </p>
+        <div className="overflow-y-auto px-5 py-2">
+          <div className="divide-y divide-gray-100 dark:divide-gray-800">
+            <div className={rowClassName}>
+              <label htmlFor="app-language" className={labelClassName}>{translate("Language")}</label>
+              <CenteredSelect id="app-language" value={locale} onChange={(event) => setLocale(event.target.value as "zh-CN" | "en-US")} className={selectClassName}>
+                <option value="zh-CN">{translate("Simplified Chinese")}</option>
+                <option value="en-US">{translate("English")}</option>
+              </CenteredSelect>
+            </div>
+            <div className={rowClassName}>
+              <label htmlFor="app-theme" className={labelClassName}>{translate("Appearance")}</label>
+              <CenteredSelect id="app-theme" value={theme} onChange={(event) => onThemeChange(event.target.value as ThemeMode)} className={selectClassName}>
+                <option value="light">{translate("Light")}</option>
+                <option value="dark">{translate("Dark")}</option>
+              </CenteredSelect>
+            </div>
+            {desktop && displaySettings && <>
+              <div className={rowClassName}>
+                <label htmlFor="tray-display-mode" className={labelClassName}>{translate("Tray")}</label>
+                <CenteredSelect id="tray-display-mode" value={displaySettings.tray_display_mode} disabled={saving} onChange={(event) => void changeDisplaySetting("set_tray_display_mode", event.target.value)} className={selectClassName}>
+                  <option value="icon_and_session">{translate("Icon + Session")}</option>
+                  <option value="active_usage_text">{translate("Hourly + Weekly")}</option>
+                  <option value="hidden">{translate("Hidden")}</option>
+                </CenteredSelect>
+              </div>
+              {displaySettings.dock_display_mode !== null && <div>
+                <div className={rowClassName}>
+                  <label htmlFor="dock-display-mode" className={labelClassName}>{translate("Dock Icon")}</label>
+                  <CenteredSelect id="dock-display-mode" value={displaySettings.dock_display_mode} disabled={saving} onChange={(event) => void changeDisplaySetting("set_dock_display_mode", event.target.value)} className={selectClassName}>
+                    <option value="show_in_dock">{translate("Show in Dock")}</option>
+                    <option value="menu_bar_only">{translate("Menu Bar Only")}</option>
+                  </CenteredSelect>
+                </div>
+                <p className="pb-3 text-xs text-gray-500 dark:text-gray-400">{translate("At least one of the Dock or tray icons stays visible so you can reopen Codex Account Manager.")}</p>
+              </div>}
+            </>}
+            {displaySettings && <div>
+              <div className={rowClassName}>
+                <label htmlFor="account-switch-mode" className={labelClassName}>{translate("Account switching")}</label>
+                <CenteredSelect id="account-switch-mode" value={displaySettings.account_switch_mode} disabled={saving} onChange={(event) => void changeDisplaySetting("set_account_switch_mode", event.target.value)} className={selectClassName}>
+                  <option value="force_close">{translate("Force close and switch")}</option>
+                  <option value="direct">{translate("Switch directly")}</option>
+                </CenteredSelect>
+              </div>
+              <p className="pb-3 text-xs leading-relaxed text-gray-500 dark:text-gray-400">{translate("Force switching closes Codex and reopens it after switching. Direct switching leaves Codex running.")}</p>
+            </div>}
+            <div>
+              <div className={rowClassName}>
+                <label htmlFor="auto-warmup" className={labelClassName}>{translate("Auto Warm Up")}</label>
+                <CenteredSelect id="auto-warmup" value={autoWarmupEnabled ? "on" : "off"} disabled={!warmupAvailable} onChange={(event) => onAutoWarmupChange(event.target.value === "on")} className={selectClassName}>
+                  <option value="off">{translate("off")}</option>
+                  <option value="on">{translate("on")}</option>
+                </CenteredSelect>
+              </div>
+              <p className="pb-3 text-xs text-gray-500 dark:text-gray-400">{autoWarmupLabel}</p>
+            </div>
+            <div>
+              <div className={rowClassName}>
+                <label htmlFor="timed-warmup" className={labelClassName}>{translate("Timed warm-up")}</label>
+                <CenteredSelect id="timed-warmup" value={timedWarmupEnabled ? "on" : "off"} disabled={!desktop} onChange={(event) => onTimedWarmupChange(event.target.value === "on")} className={selectClassName}>
+                  <option value="off">{translate("off")}</option>
+                  <option value="on">{translate("on")}</option>
+                </CenteredSelect>
+              </div>
+              <p className="mb-3 text-xs text-gray-500 dark:text-gray-400">{timedWarmupLabel}</p>
+              <div className="mb-3 flex flex-wrap gap-2">
+                {timedWarmupTimes.length === 0 ? <p className="text-xs text-gray-400">{translate("No times added yet.")}</p> : timedWarmupTimes.map(time => (
+                  <span key={time} className="inline-flex items-center gap-2 rounded-lg bg-gray-100 px-3 py-1.5 text-sm text-gray-700 dark:bg-gray-800 dark:text-gray-200">
+                    <span className="font-mono">{time}</span>
+                    <button onClick={() => onTimedWarmupTimesChange(timedWarmupTimes.filter(entry => entry !== time))} disabled={!desktop} aria-label={`${translate("Delete")} ${time}`} className="text-gray-400 hover:text-red-500 disabled:opacity-50">✕</button>
+                  </span>
+                ))}
+              </div>
+              <div className="mb-3 flex items-center justify-end gap-2">
+                <input type="time" value={timeDraft} disabled={!desktop} aria-label={translate("Timed warm-up")} onChange={event => setTimeDraft(event.target.value)} onKeyDown={event => {if (event.key === "Enter") addTime();}} className="min-w-0 rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900 disabled:opacity-50 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-100" />
+                <button onClick={addTime} disabled={!desktop || !timeDraft} className="rounded-lg bg-gray-900 px-3 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-gray-100 dark:text-gray-900">{translate("Add")}</button>
+              </div>
+            </div>
+          </div>
+          {!displaySettings && !error && <p className="py-3 text-sm text-gray-500">{translate("Loading display settings...")}</p>}
+          {error && <p role="alert" className="py-3 text-sm text-red-600 dark:text-red-300">{localizeError(error)}</p>}
         </div>
-        <div className="flex justify-end p-5 border-t border-gray-100 dark:border-gray-800">
-          <button onClick={onClose} disabled={saving} className="px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-700 dark:text-gray-200 disabled:opacity-50">{translate("Done")}</button>
+        <div className="flex shrink-0 justify-end border-t border-gray-100 p-5 dark:border-gray-800">
+          <button onClick={onClose} disabled={saving} className="rounded-lg bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-200 disabled:opacity-50 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">{translate("Done")}</button>
         </div>
       </div>
     </div>

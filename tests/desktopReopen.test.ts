@@ -1,14 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { finishForceClose, parseDesktopReopenPreference } from "../src/lib/desktopReopen.ts";
-
-test("unknown preferences default to asking; both remembered choices are preserved", () => {
-  for (const value of [null, "", "true", "invalid"]) {
-    assert.equal(parseDesktopReopenPreference(value), "ask");
-  }
-  assert.equal(parseDesktopReopenPreference("always"), "always");
-  assert.equal(parseDesktopReopenPreference("never"), "never");
-});
+import { finishForceClose } from "../src/lib/desktopReopen.ts";
 
 test("waits for account switching before reopening the captured desktop", async () => {
   const calls: string[] = [];

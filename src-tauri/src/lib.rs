@@ -25,7 +25,12 @@ use tauri::Emitter;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
+        commands::restore_main_window(app);
+    }));
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init())
@@ -75,6 +80,7 @@ pub fn run() {
             commands::get_display_settings,
             commands::set_ui_language,
             commands::set_tray_display_mode,
+            commands::set_account_switch_mode,
             commands::open_codex_app,
             commands::get_codex_reopen_info,
             commands::reopen_closed_codex_desktop,

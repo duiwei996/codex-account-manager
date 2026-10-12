@@ -62,35 +62,80 @@ fn export_value(account: &StoredAccount, format: &str) -> Result<Value> {
 
 fn export_documents(format: &str, account_id: Option<&str>) -> Result<Vec<ExportDocument>> {
     let store = load_accounts()?;
-    let selected: Vec<_> = store
-        .accounts
+    documents_for_accounts(&store.accounts, format, account_id)
+}
+
+fn documents_for_accounts(
+    accounts: &[StoredAccount],
+    format: &str,
+    account_id: Option<&str>,
+) -> Result<Vec<ExportDocument>> {
+    if format == "all" {
+        if accounts.is_empty() {
+            bail!("没有可导出的账号");
+        }
+        let values = accounts
+            .iter()
+            .map(|account| export_value(account, "official"))
+            .collect::<Result<Vec<_>>>()?;
+        let content = serde_json::to_string_pretty(&values)?;
+        if content.len() > MAX_JSON_BYTES {
+            bail!("批量导出总大小超过 8 MiB 限制，请分批导出");
+        }
+        return Ok(vec![ExportDocument {
+            account_id: String::new(),
+            name: "all-accounts.json".into(),
+            content,
+        }]);
+    }
+    // Compute names before filtering so single and batch exports use the same name.
+    let mut used_names = std::collections::HashSet::new();
+    let named: Vec<_> = accounts
         .iter()
-        .filter(|account| account_id.is_none_or(|id| account.id == id))
+        .map(|account| {
+            let safe = |value: &str| -> String {
+                let value: String = value
+                    .chars()
+                    .map(|ch| {
+                        if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | '@') {
+                            ch
+                        } else {
+                            '_'
+                        }
+                    })
+                    .take(80)
+                    .collect();
+                if value.is_empty() {
+                    "account".into()
+                } else {
+                    value
+                }
+            };
+            let label = safe(account.email.as_deref().unwrap_or(&account.name));
+            let kind = safe(&crate::auth::storage::display_name_type(account));
+            let base = format!("{label}_{kind}");
+            let mut name = format!("{base}.json");
+            let mut suffix = 2;
+            while !used_names.insert(name.to_lowercase()) {
+                name = format!("{base}_{suffix}.json");
+                suffix += 1;
+            }
+            (account, name)
+        })
+        .collect();
+    let selected: Vec<_> = named
+        .into_iter()
+        .filter(|(account, _)| account_id.is_none_or(|id| account.id == id))
         .collect();
     if selected.is_empty() {
         bail!("没有可导出的账号");
     }
     selected
         .into_iter()
-        .map(|account| {
-            let label: String = account
-                .email
-                .as_deref()
-                .unwrap_or(&account.name)
-                .chars()
-                .map(|ch| {
-                    if ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | '@') {
-                        ch
-                    } else {
-                        '_'
-                    }
-                })
-                .take(80)
-                .collect();
-            let prefix = if format == "cpa" { "codex" } else { "auth" };
+        .map(|(account, name)| {
             Ok(ExportDocument {
                 account_id: account.id.clone(),
-                name: format!("{prefix}-{label}-{}.json", account.id),
+                name,
                 content: serde_json::to_string_pretty(&export_value(account, format)?)?,
             })
         })
@@ -114,27 +159,34 @@ pub async fn save_accounts_json(
     let documents =
         export_documents(&format, account_id.as_deref()).map_err(|error| error.to_string())?;
     let destination = Path::new(&path);
-    if account_id.is_none() && !destination.is_dir() {
+    let single_file = account_id.is_some() || format == "all";
+    if !single_file && !destination.is_dir() {
         return Err("请选择导出文件夹".into());
     }
     let targets: Vec<_> = documents
         .iter()
         .map(|document| {
-            if account_id.is_some() {
+            if single_file {
                 destination.to_path_buf()
             } else {
                 destination.join(&document.name)
             }
         })
         .collect();
-    if account_id.is_none() && targets.iter().any(|path| path.exists()) {
+    if !single_file && targets.iter().any(|path| path.exists()) {
         return Err("文件夹中已有同名导出文件，请选择其他文件夹".into());
     }
     for (document, target) in documents.iter().zip(targets) {
         crate::auth::secure_file::atomic_write(&target, document.content.as_bytes())
             .map_err(|error| error.to_string())?;
     }
-    Ok(documents.len())
+    if format == "all" {
+        let values: Vec<Value> =
+            serde_json::from_str(&documents[0].content).map_err(|error| error.to_string())?;
+        Ok(values.len())
+    } else {
+        Ok(documents.len())
+    }
 }
 
 pub(crate) fn parse_account(value: Value) -> Result<StoredAccount> {
@@ -259,6 +311,51 @@ pub async fn import_accounts_json_files(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn names_match_for_single_and_batch_and_collisions_never_overwrite() {
+        let first = account();
+        let mut second = account();
+        second.email = Some("TEST@example.com".into());
+        let mut plus = account();
+        plus.plan_type = Some("plus".into());
+        let accounts = vec![first.clone(), second, plus];
+        for format in ["official", "cpa"] {
+            let batch = documents_for_accounts(&accounts, format, None).unwrap();
+            assert_eq!(batch[0].name, "test@example.com_team.json");
+            assert_eq!(batch[1].name, "TEST@example.com_team_2.json");
+            assert_eq!(batch[2].name, "test@example.com_plus.json");
+            for document in batch {
+                let single =
+                    documents_for_accounts(&accounts, format, Some(&document.account_id)).unwrap();
+                assert_eq!(single[0].name, document.name);
+                assert_eq!(single[0].content, document.content);
+            }
+        }
+    }
+
+    #[test]
+    fn all_accounts_exports_one_official_array_and_roundtrips_mixed_auth() {
+        let accounts = vec![
+            account(),
+            StoredAccount::new_api_key("API key".into(), "synthetic-api-key".into()),
+        ];
+        let documents = documents_for_accounts(&accounts, "all", Some(&accounts[0].id)).unwrap();
+        assert_eq!(documents.len(), 1);
+        assert_eq!(documents[0].name, "all-accounts.json");
+        let values: Vec<Value> = serde_json::from_str(&documents[0].content).unwrap();
+        assert_eq!(values.len(), 2);
+        assert!(values[0].get("tokens").is_some());
+        assert!(values[0].get("auth_data").is_none());
+        assert!(values[1].get("OPENAI_API_KEY").is_some());
+        let restored = parse_import_payload(&documents[0].content).unwrap();
+        for (original, restored) in accounts.iter().zip(restored) {
+            assert_eq!(
+                serde_json::to_value(&original.auth_data).unwrap(),
+                serde_json::to_value(restored.auth_data).unwrap()
+            );
+        }
+        assert!(documents_for_accounts(&[], "all", None).is_err());
+    }
     fn account() -> StoredAccount {
         StoredAccount::new_chatgpt(
             "test".into(),

@@ -124,10 +124,18 @@ fn close_codex_processes_blocking(
     force_close: bool,
 ) -> Result<KillCodexProcessesResult, String> {
     let (pids, _) = find_codex_processes().map_err(|e| e.to_string())?;
-    // Capture exact desktop identities before termination. Detection failure must
-    // never prevent the existing close-only flow.
+    close_codex_processes_for_pids(pids, reopen_desktop, force_close)
+}
+
+fn close_codex_processes_for_pids(
+    pids: Vec<u32>,
+    reopen_desktop: bool,
+    force_close: bool,
+) -> Result<KillCodexProcessesResult, String> {
+    // Resolve the exact desktop before termination. When reopening is requested,
+    // a detection error must be reported before closing the user's app.
     let desktops = if reopen_desktop || (cfg!(target_os = "macos") && !force_close) {
-        desktop_reopen::capture_desktops(&pids).unwrap_or_default()
+        desktop_reopen::capture_desktops(&pids)?
     } else {
         Vec::new()
     };
@@ -754,8 +762,8 @@ fn is_windows_codex_root_process(process: &WindowsCodexProcess) -> bool {
     let name = process.name.to_ascii_lowercase();
     let command = normalize_windows_path(&process.command_line);
 
-    if command.contains("codex-switcher")
-        || command.contains("codex-account-manager")
+    if name == "codex-switcher.exe"
+        || name == "codex-account-manager.exe"
         || command.contains("--type=")
     {
         return false;

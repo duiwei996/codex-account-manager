@@ -11,6 +11,8 @@ enum DesktopTarget {
     #[cfg(any(windows, test))]
     WindowsExecutable(String),
     #[cfg(any(windows, test))]
+    WindowsIsolatedExecutable { path: String, user_data_dir: String },
+    #[cfg(any(windows, test))]
     WindowsAppId(String),
 }
 
@@ -86,16 +88,24 @@ pub(super) fn capture_desktops(pids: &[u32]) -> Result<Vec<CapturedDesktop>, Str
                 continue;
             }
             if let Some(path) = windows_desktop_executable(&process) {
-                let target = if path.to_ascii_lowercase().contains("\\windowsapps\\") {
+                let target = if let Some(user_data_dir) =
+                    windows_isolated_user_data_dir(&process.command_line)
+                {
+                    let executable = std::path::Path::new(&path);
+                    (executable.is_file() && super::looks_like_windows_desktop_app(executable))
+                        .then_some(DesktopTarget::WindowsIsolatedExecutable {
+                            path,
+                            user_data_dir,
+                        })
+                } else if path.to_ascii_lowercase().contains("\\windowsapps\\") {
                     // Packaged apps require their exact registered identity, not
                     // whichever Codex happens to be first in the Start menu.
-                    windows_app_id(&path).map(DesktopTarget::WindowsAppId)
+                    Some(DesktopTarget::WindowsAppId(windows_app_id(&path).ok_or_else(|| {
+                        "Could not resolve the running Codex desktop identity; closing was cancelled".to_string()
+                    })?))
                 } else {
                     let executable = std::path::Path::new(&path);
-                    let has_desktop_resources = executable.parent().is_some_and(|parent| {
-                        parent.join("resources/app.asar").is_file()
-                            || parent.join("resources/app").is_dir()
-                    });
+                    let has_desktop_resources = super::looks_like_windows_desktop_app(executable);
                     (executable.is_file() && has_desktop_resources)
                         .then_some(DesktopTarget::WindowsExecutable(path))
                 };
@@ -168,6 +178,44 @@ fn windows_desktop_executable(process: &super::WindowsCodexProcess) -> Option<St
         return None;
     }
     Some(path)
+}
+
+#[cfg(windows)]
+fn windows_isolated_user_data_dir(command: &str) -> Option<String> {
+    use std::os::windows::ffi::OsStringExt;
+    use windows_sys::Win32::{Foundation::LocalFree, UI::Shell::CommandLineToArgvW};
+    let wide: Vec<u16> = command.encode_utf16().chain(Some(0)).collect();
+    let mut count = 0;
+    let argv = unsafe { CommandLineToArgvW(wide.as_ptr(), &mut count) };
+    if argv.is_null() {
+        return None;
+    }
+    let mut args = Vec::new();
+    for index in 0..count as usize {
+        let value = unsafe { *argv.add(index) };
+        let mut len = 0;
+        while unsafe { *value.add(len) } != 0 {
+            len += 1;
+        }
+        args.push(
+            std::ffi::OsString::from_wide(unsafe { std::slice::from_raw_parts(value, len) })
+                .to_string_lossy()
+                .into_owned(),
+        );
+    }
+    unsafe {
+        LocalFree(argv.cast());
+    }
+    let value = args.iter().enumerate().find_map(|(index, arg)| {
+        arg.strip_prefix("--user-data-dir=")
+            .map(str::to_owned)
+            .or_else(|| {
+                (arg == "--user-data-dir")
+                    .then(|| args.get(index + 1).cloned())
+                    .flatten()
+            })
+    })?;
+    std::path::Path::new(&value).is_absolute().then_some(value)
 }
 
 #[cfg(windows)]
@@ -261,9 +309,15 @@ pub async fn reopen_closed_codex_desktop(token: String) -> Result<(), String> {
             &mut *PENDING_REOPEN.lock().map_err(|e| e.to_string())?,
             &token,
         )?;
-        super::ensure_codex_not_running()?;
+        // A CLI or IDE process may have restarted independently; only the captured
+        // desktop identities determine whether the app needs relaunching.
         let expected = targets.clone();
+        let running: Vec<_> = {
+            let (pids, _) = super::find_codex_processes().map_err(|e| e.to_string())?;
+            capture_desktops(&pids)?.into_iter().map(|desktop| desktop.target).collect()
+        };
         for target in &targets {
+            if running.contains(target) { continue; }
             if !launch_desktop(target) {
                 return Err("Could not launch Codex desktop. The account change was not undone. Open Codex manually.".into());
             }
@@ -316,6 +370,23 @@ fn launch_desktop(target: &DesktopTarget) -> bool {
             super::spawn_windows_codex_exe(std::path::Path::new(path))
         }
         #[cfg(windows)]
+        DesktopTarget::WindowsIsolatedExecutable {
+            path,
+            user_data_dir,
+        } => {
+            use std::os::windows::process::CommandExt;
+            let mut command = super::Command::new(path);
+            command
+                .creation_flags(super::CREATE_NO_WINDOW)
+                .arg(format!("--user-data-dir={user_data_dir}"))
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+            if let Some(parent) = std::path::Path::new(path).parent() {
+                command.current_dir(parent);
+            }
+            command.spawn().is_ok()
+        }
+        #[cfg(windows)]
         DesktopTarget::WindowsAppId(id) => {
             use std::os::windows::process::CommandExt;
             valid_windows_app_id(id) && super::command_succeeds(
@@ -334,6 +405,251 @@ fn launch_desktop(target: &DesktopTarget) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(windows)]
+    #[test]
+    fn isolated_desktop_arguments_preserve_explicit_profiles() {
+        let isolated = super::super::WindowsCodexProcess {
+            process_id: 1,
+            parent_process_id: 0,
+            name: "ChatGPT.exe".into(),
+            main_window_title: String::new(),
+            executable_path: r"C:\Program Files\WindowsApps\OpenAI.Codex_26.1_x64__2p2nqsd0c76g0\app\ChatGPT.exe".into(),
+            command_line: r#""C:\Program Files\WindowsApps\OpenAI.Codex_26.1_x64__2p2nqsd0c76g0\app\ChatGPT.exe" --user-data-dir=H:\codex-account-manager\test"#.into(),
+        };
+        assert!(super::super::is_windows_codex_root_process(&isolated));
+        assert_eq!(
+            windows_isolated_user_data_dir(
+                r#""C:\Apps\ChatGPT.exe" --user-data-dir="H:\Test Profile""#
+            ),
+            Some(r"H:\Test Profile".into())
+        );
+        assert_eq!(
+            windows_isolated_user_data_dir(
+                r#""C:\Apps\ChatGPT.exe" --user-data-dir "H:\Test Profile""#
+            ),
+            Some(r"H:\Test Profile".into())
+        );
+        assert_eq!(
+            windows_isolated_user_data_dir(r#""C:\Apps\ChatGPT.exe" --user-data-dir=relative"#),
+            None
+        );
+        assert_eq!(
+            windows_isolated_user_data_dir(r#""C:\Apps\ChatGPT.exe""#),
+            None
+        );
+    }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    #[ignore = "Live isolated Codex only: requires its launch record and separate CODEX_HOME"]
+    async fn live_isolated_desktop_auth_close_reopen() {
+        use crate::types::AuthData;
+        use base64::Engine;
+        use std::os::windows::process::CommandExt;
+        let root =
+            std::path::Path::new(r"H:\codex-account-manager\.runtime\codex-real-test-20261012");
+        let home = root.join("codex-home");
+        assert_eq!(
+            crate::auth::get_codex_home().unwrap(),
+            home,
+            "Refusing to touch the normal Codex home"
+        );
+        let record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.join("launch.json")).unwrap()).unwrap();
+        let pid = record["TestPid"].as_u64().unwrap() as u32;
+        let protected: Vec<u32> = record["ProtectedPids"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p.as_u64().unwrap() as u32)
+            .collect();
+        assert!(!protected.contains(&pid), "Target is a protected process");
+        let user_data = root
+            .join("electron-user-data")
+            .to_string_lossy()
+            .into_owned();
+        let processes = super::super::read_windows_codex_processes().unwrap();
+        let process = processes
+            .iter()
+            .find(|p| p.process_id == pid)
+            .expect("Isolated desktop is not running");
+        assert_eq!(
+            windows_isolated_user_data_dir(&process.command_line).as_deref(),
+            Some(user_data.as_str()),
+            "Refusing a desktop without the exact test profile"
+        );
+        let target = capture_desktops(&[pid])
+            .unwrap()
+            .pop()
+            .expect("No isolated desktop identity");
+        assert!(matches!(
+            &target.target,
+            DesktopTarget::WindowsIsolatedExecutable { .. }
+        ));
+        let protected_roots: Vec<u32> = processes
+            .iter()
+            .filter(|p| {
+                protected.contains(&p.process_id) && super::super::is_windows_codex_root_process(p)
+            })
+            .map(|p| p.process_id)
+            .collect();
+        let store = crate::auth::load_accounts().unwrap();
+        let now = chrono::Utc::now().timestamp();
+        let baseline_auth = crate::auth::read_current_auth().unwrap();
+        let baseline_access = baseline_auth
+            .as_ref()
+            .and_then(|auth| auth.tokens.as_ref())
+            .map(|tokens| tokens.access_token.as_str());
+        let account = store
+            .accounts
+            .iter()
+            .find(|account| {
+                if store.active_account_id.as_deref() == Some(&account.id) {
+                    return false;
+                }
+                let AuthData::ChatGPT { access_token, .. } = &account.auth_data else {
+                    return false;
+                };
+                if baseline_access == Some(access_token.as_str()) {
+                    return false;
+                }
+                access_token
+                    .split('.')
+                    .nth(1)
+                    .and_then(|p| {
+                        base64::engine::general_purpose::URL_SAFE_NO_PAD
+                            .decode(p)
+                            .ok()
+                    })
+                    .and_then(|p| serde_json::from_slice::<serde_json::Value>(&p).ok())
+                    .and_then(|p| p["exp"].as_i64())
+                    .is_some_and(|expiry| expiry > now + 300)
+            })
+            .expect("No non-current account has an unexpired access token");
+        println!(
+            "TEST_ACCOUNT name={} type={} (credentials withheld)",
+            account.name,
+            account.plan_type.as_deref().unwrap_or("unknown")
+        );
+        let usage = crate::api::usage::get_account_usage(account)
+            .await
+            .expect("Test account usage request failed before closing");
+        assert!(usage.error.is_none(), "Test account usage is unavailable");
+        println!("TEST_ACCOUNT_AUTHENTICATED usage_api=true");
+        let closed = super::super::close_codex_processes_for_pids(vec![pid], true, true).unwrap();
+        assert!(closed.failed_pids.is_empty());
+        assert!(closed.killed_pids.contains(&pid));
+        for protected_pid in &protected_roots {
+            assert!(
+                super::super::process_exists(*protected_pid),
+                "A protected desktop was closed"
+            );
+        }
+        println!("TEST_DESKTOP_CLOSED pid={pid} protected_roots_alive=true");
+        crate::auth::switch_to_account(account).unwrap();
+        let written = crate::auth::read_current_auth().unwrap().unwrap();
+        let AuthData::ChatGPT { access_token, .. } = &account.auth_data else {
+            unreachable!()
+        };
+        assert!(
+            written
+                .tokens
+                .as_ref()
+                .is_some_and(|tokens| &tokens.access_token == access_token),
+            "Test auth.json does not match the chosen account"
+        );
+        println!("AUTH_JSON_REPLACED verified=true");
+        reopen_closed_codex_desktop(closed.reopen_token.expect("Missing reopen ticket"))
+            .await
+            .unwrap();
+        let (pids, _) = super::super::find_codex_processes().unwrap();
+        let new_desktop = capture_desktops(&pids)
+            .unwrap()
+            .into_iter()
+            .find(|d| d.target == target.target)
+            .expect("Reopened isolated desktop not found");
+        assert_ne!(pid, new_desktop.pid);
+        for protected_pid in &protected_roots {
+            assert!(super::super::process_exists(*protected_pid));
+        }
+        println!(
+            "TEST_DESKTOP_REOPENED pid={} protected_roots_alive=true",
+            new_desktop.pid
+        );
+        let new_record = serde_json::json!({"TestPid":new_desktop.pid,"ProtectedPids":protected,"CodexHome":home,"UserData":user_data});
+        std::fs::write(
+            root.join("launch.json"),
+            serde_json::to_vec_pretty(&new_record).unwrap(),
+        )
+        .unwrap();
+        let desktop_path = windows_desktop_executable(process).unwrap();
+        let cli = super::super::read_windows_codex_processes()
+            .unwrap()
+            .into_iter()
+            .find(|p| {
+                p.parent_process_id == new_desktop.pid
+                    && p.name.eq_ignore_ascii_case("codex.exe")
+                    && p.command_line.contains("app-server")
+            })
+            .map(|p| std::path::PathBuf::from(p.executable_path))
+            .unwrap_or_else(|| {
+                std::path::Path::new(&desktop_path)
+                    .parent()
+                    .unwrap()
+                    .join("resources/codex.exe")
+            });
+        let status = super::super::Command::new(&cli)
+            .creation_flags(super::super::CREATE_NO_WINDOW)
+            .args([
+                "-c",
+                "cli_auth_credentials_store=\"file\"",
+                "login",
+                "status",
+            ])
+            .output()
+            .unwrap();
+        let status_text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&status.stdout),
+            String::from_utf8_lossy(&status.stderr)
+        );
+        assert!(
+            status.status.success() && status_text.to_lowercase().contains("chatgpt"),
+            "Codex CLI did not recognize the replaced login"
+        );
+        println!("CODEX_RECOGNIZED_AUTH login_status=true");
+        let response = super::super::Command::new(&cli)
+            .creation_flags(super::super::CREATE_NO_WINDOW)
+            .current_dir(root)
+            .args([
+                "exec",
+                "--ephemeral",
+                "--skip-git-repo-check",
+                "--sandbox",
+                "read-only",
+                "--json",
+                "Reply exactly AUTH_TEST_OK. Do not use tools or inspect files.",
+            ])
+            .output()
+            .unwrap();
+        let content = String::from_utf8_lossy(&response.stdout);
+        let completed = content
+            .lines()
+            .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+            .any(|event| {
+                event["type"] == "item.completed"
+                    && event["item"]["type"] == "agent_message"
+                    && event["item"]["text"]
+                        .as_str()
+                        .is_some_and(|text| text.trim() == "AUTH_TEST_OK")
+            });
+        assert!(
+            response.status.success() && completed,
+            "The replaced account did not complete a real Codex inference request"
+        );
+        println!("REAL_CODEX_INFERENCE response=AUTH_TEST_OK");
+    }
 
     #[test]
     fn launch_confirmation_requires_the_exact_desktop_and_handles_detection_failure() {

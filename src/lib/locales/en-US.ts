@@ -274,5 +274,10 @@ export default {
   "minimal": "minimal",
   "none": "none",
   "Recorded at": "Recorded at",
-  "Account list": "Account list"
+  "Account list": "Account list",
+  "Click Login to open your browser and authenticate.": "Click Login to open your browser and authenticate.",
+  "Account switching": "Account switching",
+  "Force close and switch": "Force close and switch",
+  "Switch directly": "Switch directly",
+  "Force switching closes Codex and reopens it after switching. Direct switching leaves Codex running.": "Force switching closes Codex and reopens it after switching. Direct switching leaves Codex running.",
 } as Record<string, string>;

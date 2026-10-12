@@ -112,10 +112,11 @@ fn load_accounts_unlocked() -> Result<AccountsStore> {
     } else {
         raw
     };
-    let store: AccountsStore =
+    let mut store: AccountsStore =
         serde_json::from_slice(&plaintext).context("Invalid account store")?;
+    let renamed = normalize_generated_names(&mut store);
     super::validation::validate_store(&store)?;
-    if !encrypted {
+    if !encrypted || renamed {
         save_accounts_unlocked(&store)?;
     }
     Ok(store)
@@ -233,6 +234,56 @@ pub(crate) fn same_account_type(a: &StoredAccount, b: &StoredAccount) -> bool {
     }
 }
 
+pub(crate) fn display_name_type(account: &StoredAccount) -> String {
+    match &account.auth_data {
+        AuthData::ApiKey { .. } => "api_key".into(),
+        AuthData::ChatGPT { .. } => account
+            .plan_type
+            .as_deref()
+            .unwrap_or("unknown")
+            .trim()
+            .to_lowercase(),
+    }
+}
+
+fn unique_display_name(store: &AccountsStore, account: &StoredAccount, name: &str) -> String {
+    let mut candidate = name.to_owned();
+    let base: String = name.chars().take(110).collect();
+    let mut suffix = 2;
+    while store.accounts.iter().any(|other| {
+        other.id != account.id
+            && other.name.trim() == candidate.trim()
+            && display_name_type(other) == display_name_type(account)
+    }) {
+        candidate = format!("{base} #{suffix}");
+        suffix += 1;
+    }
+    candidate
+}
+
+// Only repair old automatically generated email suffixes, preserving custom names.
+fn normalize_generated_names(store: &mut AccountsStore) -> bool {
+    let mut changed = false;
+    for index in 0..store.accounts.len() {
+        let account = &store.accounts[index];
+        let Some(email) = account.email.as_deref() else {
+            continue;
+        };
+        let generated = account
+            .name
+            .strip_prefix(&format!("{email} #"))
+            .is_some_and(|suffix| suffix.parse::<u32>().is_ok_and(|n| n >= 2));
+        if generated {
+            let name = unique_display_name(store, account, email);
+            if name != account.name {
+                store.accounts[index].name = name;
+                changed = true;
+            }
+        }
+    }
+    changed
+}
+
 pub(crate) fn upsert_account(
     store: &mut AccountsStore,
     mut account: StoredAccount,
@@ -273,16 +324,7 @@ pub(crate) fn upsert_account(
             .masked_account_ids
             .retain(|id| store.accounts.iter().any(|entry| &entry.id == id));
     } else {
-        let original_name: String = account.name.chars().take(110).collect();
-        let mut suffix = 2;
-        while store
-            .accounts
-            .iter()
-            .any(|existing| existing.name == account.name)
-        {
-            account.name = format!("{original_name} #{suffix}");
-            suffix += 1;
-        }
+        account.name = unique_display_name(store, &account, &account.name);
         store.accounts.push(account.clone());
     }
     super::validation::validate_store(store)?;
@@ -297,6 +339,39 @@ pub fn add_account(account: StoredAccount) -> Result<StoredAccount> {
 #[cfg(test)]
 mod account_merge_tests {
     use super::*;
+    #[test]
+    fn suffixes_only_disambiguate_names_with_the_same_type() {
+        let mut store = AccountsStore::default();
+        let first = upsert_account(&mut store, login("team", "one")).unwrap();
+        let mut second = login("TEAM", "two");
+        second.email = Some("different@example.com".into());
+        second.name = first.name.clone();
+        let second = upsert_account(&mut store, second).unwrap();
+        assert_eq!(second.name, format!("{} #2", first.name));
+        let mut plus = login("plus", "three");
+        plus.name = first.name.clone();
+        assert_eq!(upsert_account(&mut store, plus).unwrap().name, first.name);
+        super::super::validation::validate_store(&store).unwrap();
+    }
+
+    #[test]
+    fn old_email_suffixes_are_repaired_without_touching_custom_names() {
+        let free = login("free", "free");
+        let mut team = login("team", "team");
+        let mut custom = login("plus", "plus");
+        team.name = format!("{} #2", free.name);
+        custom.name = "My account #2".into();
+        let mut store = AccountsStore::default();
+        store.accounts = vec![free.clone(), team, custom];
+        assert!(normalize_generated_names(&mut store));
+        assert_eq!(store.accounts[1].name, free.name);
+        assert_eq!(store.accounts[2].name, "My account #2");
+        assert!(!normalize_generated_names(&mut store));
+        let mut duplicate = login("free", "duplicate");
+        duplicate.name = "same@example.com #2".into();
+        store.accounts.push(duplicate);
+        assert!(!normalize_generated_names(&mut store));
+    }
     fn login(plan: &str, token: &str) -> StoredAccount {
         StoredAccount::new_chatgpt(
             String::new(),
@@ -315,7 +390,7 @@ mod account_merge_tests {
         let plus = upsert_account(&mut store, login("plus", "old-plus")).unwrap();
         let team = upsert_account(&mut store, login("team", "old-team")).unwrap();
         assert_ne!(plus.id, team.id);
-        assert_ne!(plus.name, team.name);
+        assert_eq!(plus.name, team.name);
         assert_eq!(store.accounts.len(), 2);
         store.active_account_id = Some(team.id.clone());
         store.masked_account_ids = vec![team.id.clone()];
@@ -433,16 +508,17 @@ pub fn update_account_metadata(
         if let Some(ref new_name) = name {
             super::validation::validate_name(new_name)?;
         }
-        // Check for duplicate names first (if renaming)
-        if let Some(ref new_name) = name {
-            if store
-                .accounts
-                .iter()
-                .any(|a| a.id != account_id && a.name == *new_name)
-            {
-                anyhow::bail!("An account with name '{new_name}' already exists");
-            }
+        let target = store
+            .accounts
+            .iter()
+            .find(|a| a.id == account_id)
+            .context("Account not found")?;
+        let mut updated = target.clone();
+        if let Some(ref plan) = plan_type {
+            updated.plan_type = Some(plan.clone());
         }
+        let updated_name =
+            unique_display_name(store, &updated, name.as_deref().unwrap_or(&target.name));
 
         // Now find and update the account
         let account = store
@@ -451,11 +527,7 @@ pub fn update_account_metadata(
             .find(|a| a.id == account_id)
             .context("Account not found")?;
 
-        if let Some(new_name) = name {
-            if account.name != new_name {
-                account.name = new_name;
-            }
-        }
+        account.name = updated_name;
 
         if let Some(new_email) = email {
             if account.email.as_ref() != Some(&new_email) {

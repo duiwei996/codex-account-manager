@@ -40,9 +40,18 @@ fn default_close_behavior_prompt_enabled() -> bool {
     true
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountSwitchMode {
+    Direct,
+    #[default]
+    ForceClose,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
+    pub account_switch_mode: AccountSwitchMode,
     pub tray_display_mode: TrayDisplayMode,
     pub dock_display_mode: DockDisplayMode,
     pub ui_language: String,
@@ -53,6 +62,7 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            account_switch_mode: AccountSwitchMode::default(),
             tray_display_mode: TrayDisplayMode::default(),
             dock_display_mode: DockDisplayMode::default(),
             ui_language: "zh-CN".to_string(),
@@ -552,6 +562,10 @@ mod tests {
         assert_eq!(settings.tray_display_mode, TrayDisplayMode::ActiveUsageText);
         assert_eq!(settings.dock_display_mode, DockDisplayMode::ShowInDock);
         assert!(settings.close_behavior_prompt_enabled);
+        assert_eq!(
+            settings.account_switch_mode,
+            super::AccountSwitchMode::ForceClose
+        );
     }
 }
 

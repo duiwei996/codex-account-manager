@@ -1,5 +1,5 @@
 export interface ExportDocument { account_id: string; name: string; content: string }
-export type ExportFormat = "official" | "cpa";
+export type ExportFormat = "official" | "cpa" | "all";
 export function maskAccountJson(content: string): string {
   const fields = new Set(["OPENAI_API_KEY", "id_token", "access_token", "refresh_token", "account_id", "email"]);
   return JSON.stringify(JSON.parse(content), (key, value) => fields.has(key) && typeof value === "string" && value

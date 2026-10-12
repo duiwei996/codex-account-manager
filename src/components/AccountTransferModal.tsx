@@ -1,3 +1,4 @@
+import { CenteredSelect } from "./CenteredSelect";
 import { localizeError } from "../lib/errors";
 import { useEffect, useState } from "react";
 import { useLocale } from "../lib/i18n";
@@ -5,10 +6,14 @@ import { invokeBackend } from "../lib/platform";
 import { maskAccountJson, type ExportDocument, type ExportFormat } from "../lib/accountTransfer";
 import type { ImportAccountsSummary } from "../types";
 interface Props { open: boolean; mode: "export" | "import"; accountId: string | null; onClose: () => void; onImported: () => Promise<void> }
-export function AccountTransferModal({open: visible,mode,accountId,onClose,onImported}: Props) {
+export function AccountTransferModal(props: Props) {
+  return <AccountTransferForm key={`${props.open}:${props.mode}:${props.accountId ?? "all"}`} {...props} />;
+}
+
+function AccountTransferForm({open: visible,mode,accountId,onClose,onImported}: Props) {
   const locale = useLocale();
   const label = (zh: string,en: string) => locale === "zh-CN" ? zh : en;
-  const [format,setFormat] = useState<ExportFormat>("official");
+  const [format,setFormat] = useState<ExportFormat>(accountId ? "official" : "all");
   const [documents,setDocuments] = useState<ExportDocument[]>([]);
   const [reveal,setReveal] = useState(false);
   const [payload,setPayload] = useState("");
@@ -20,7 +25,7 @@ export function AccountTransferModal({open: visible,mode,accountId,onClose,onImp
     setDocuments([]);setPayload("");setReveal(false);setError("");setNotice("");
     if (!visible || mode !== "export") {setBusy(false);return;}
     setBusy(true);
-    invokeBackend<ExportDocument[]>("export_accounts_json",{format,accountId})
+    invokeBackend<ExportDocument[]>("export_accounts_json",{format,accountId: format === "all" ? null : accountId})
       .then(value => {if(active)setDocuments(value);})
       .catch(error => {if(active)setError(String(error));})
       .finally(() => {if(active)setBusy(false);});
@@ -31,9 +36,9 @@ export function AccountTransferModal({open: visible,mode,accountId,onClose,onImp
     setError("");setNotice("");
     try {
       const {save,open} = await import("@tauri-apps/plugin-dialog");
-      const id = document?.account_id ?? accountId;
-      const selected = id
-        ? await save({title:label("导出 JSON","Export JSON"),defaultPath:format === "official" ? "auth.json" : document?.name ?? documents[0]?.name,filters:[{name:"JSON",extensions:["json"]}]})
+      const id = format === "all" ? null : document?.account_id ?? accountId;
+      const selected = id || format === "all"
+        ? await save({title:label("导出 JSON","Export JSON"),defaultPath:document?.name ?? documents[0]?.name,filters:[{name:"JSON",extensions:["json"]}]})
         : await open({title:label("选择导出文件夹","Choose export folder"),directory:true,multiple:false});
       if(!selected || Array.isArray(selected))return;
       setBusy(true);
@@ -73,22 +78,24 @@ export function AccountTransferModal({open: visible,mode,accountId,onClose,onImp
       <div className="space-y-4 overflow-y-auto p-5">
         {mode === "export" ? <>
           <label className="flex items-center gap-4 text-sm font-medium">{label("导出格式","Export format")}
-            <select className={button} value={format} disabled={busy} onChange={event=>setFormat(event.target.value as ExportFormat)}>
+            <CenteredSelect className={button} value={format} disabled={busy} onChange={event=>setFormat(event.target.value as ExportFormat)}>
+              {!accountId && <option value="all">{label("全部账号","All accounts")}</option>}
               <option value="official">{label("官方 auth.json","Official auth.json")}</option><option value="cpa">{label("CPA 格式","CPA format")}</option>
-            </select>
+            </CenteredSelect>
           </label>
+          {format === "all" && <p className="text-sm text-gray-500">{label("将全部账号合并为一个 JSON，每个账号采用 auth.json 格式，可批量导入。","Export every account as one JSON array of auth.json objects, ready for batch import.")}</p>}
           <div className="flex flex-wrap gap-3">
             <button className={button} disabled={busy||!documents.length} onClick={()=>setReveal(!reveal)}>{reveal?label("隐藏凭据","Hide credentials"):label("预览完整内容","Preview full content")}</button>
-            {accountId&&<button className={button} disabled={busy||!documents.length} onClick={()=>void copy()}>{label("复制","Copy")}</button>}
-            <button className={`${button} bg-blue-600 text-white`} disabled={busy||!documents.length} onClick={()=>void download()}>{accountId?label("下载","Download"):label("一键下载全部","Download all")}</button>
+            {(accountId || format === "all")&&<button className={button} disabled={busy||!documents.length} onClick={()=>void copy()}>{label("复制","Copy")}</button>}
+            <button className={`${button} bg-blue-600 text-white`} disabled={busy||!documents.length} onClick={()=>void download()}>{accountId || format === "all"?label("下载","Download"):label("一键下载全部","Download all")}</button>
           </div>
           <p className="text-xs text-gray-500">{label("导出文件和复制内容包含完整登录凭据，请妥善保管。","Exported files and copied JSON contain full credentials. Keep them private.")}</p>
           {documents.map((document,index)=><section key={document.account_id} className="space-y-3 rounded-xl border border-gray-200 p-4 dark:border-gray-700">
-            {!accountId&&<div className="flex items-center justify-between"><h3 className="font-medium">{label(`账号 ${index+1}`,`Account ${index+1}`)}</h3><button className={button} disabled={busy} onClick={()=>void download(document)}>{label("下载","Download")}</button></div>}
+            {!accountId && format !== "all"&&<div className="flex items-center justify-between"><h3 className="font-medium">{label(`账号 ${index+1}`,`Account ${index+1}`)}</h3><button className={button} disabled={busy} onClick={()=>void download(document)}>{label("下载","Download")}</button></div>}
             <textarea className="h-64 w-full rounded-xl border border-gray-200 bg-gray-50 p-4 font-mono text-sm dark:border-gray-700 dark:bg-gray-800" readOnly aria-label={label(`账号 ${index+1} JSON 预览`,`Account ${index+1} JSON preview`)} value={reveal?document.content:maskAccountJson(document.content)} />
           </section>)}
         </>:<>
-          <p className="text-sm text-gray-500">{label("支持官方 auth.json 和 CPA 格式，可同时选择多个文件，也可粘贴一个账号或 JSON 数组。自动识别格式，重复账号会跳过。","Select multiple official auth.json or CPA files, or paste account JSON or an array. Formats are detected automatically; duplicates are skipped.")}</p>
+          <p className="text-sm text-gray-500">{label("支持官方 auth.json、CPA 格式和全部账号 JSON，可同时选择多个文件，也可粘贴一个账号或 JSON 数组。相同邮箱和类型的账号会更新凭据。","Select multiple official auth.json, CPA or all-account JSON files, or paste account JSON or an array. Matching email and account type updates existing credentials.")}</p>
           <button className={`${button} bg-blue-600 text-white`} disabled={busy} onClick={()=>void importJson(true)}>{label("选择文件批量导入","Import JSON files")}</button>
           <textarea className="h-64 w-full rounded-xl border border-gray-200 bg-gray-50 p-4 font-mono text-sm dark:border-gray-700 dark:bg-gray-800" value={payload} disabled={busy} onChange={event=>setPayload(event.target.value)} aria-label={label("粘贴账号 JSON","Paste account JSON")} spellCheck={false}/>
           <button className={button} disabled={busy||!payload.trim()} onClick={()=>void importJson(false)}>{label("导入粘贴内容","Import pasted JSON")}</button>

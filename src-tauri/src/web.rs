@@ -236,6 +236,7 @@ fn web_command_allowed(command: &str, allow_writes: bool) -> bool {
             | "refresh_account_metadata"
             | "refresh_all_accounts_usage"
             | "get_masked_account_ids"
+            | "get_display_settings"
     ) || (allow_writes
         && matches!(
             command,
@@ -243,6 +244,7 @@ fn web_command_allowed(command: &str, allow_writes: bool) -> bool {
                 | "delete_account"
                 | "switch_account"
                 | "set_masked_account_ids"
+                | "set_account_switch_mode"
                 | "add_account_from_auth_json_text"
         ))
 }
@@ -268,6 +270,15 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
             to_json(refresh_account_metadata(args.account_id).await?)
         }
         "refresh_all_accounts_usage" => to_json(refresh_all_accounts_usage().await?),
+        "get_display_settings" => to_json(crate::commands::get_display_settings()?),
+        "set_account_switch_mode" => {
+            #[derive(Deserialize)]
+            struct Args {
+                mode: crate::types::AccountSwitchMode,
+            }
+            let args: Args = parse_args(payload)?;
+            to_json(crate::commands::set_account_switch_mode(args.mode)?)
+        }
         "switch_account" => {
             let args: AccountIdArgs = parse_args(payload)?;
             to_json(switch_account(args.account_id, None).await?)

@@ -49,9 +49,6 @@ struct SwitchAccountBlockedPayload {
 }
 
 pub fn setup(app: &AppHandle) -> tauri::Result<()> {
-    #[cfg(not(target_os = "linux"))]
-    create_tray_window(app)?;
-
     let menu = build_menu(app, &load_accounts().unwrap_or_default())?;
 
     #[cfg(target_os = "linux")]
@@ -81,6 +78,12 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false);
 
     builder.build(app)?;
+    // A popup WebView failure must not remove the system tray entry. The native
+    // right-click menu remains available, and a left click can retry the popup.
+    #[cfg(not(target_os = "linux"))]
+    if let Err(error) = create_tray_window(app) {
+        eprintln!("Failed to create tray popup (native tray remains available): {error}");
+    }
     refresh_menu(app);
 
     watch_accounts_file(app.clone());
@@ -276,6 +279,13 @@ fn handle_tray_icon_event<R: Runtime>(tray: &tauri::tray::TrayIcon<R>, event: Tr
 
 #[cfg_attr(target_os = "linux", allow(dead_code))]
 fn toggle_tray_window<R: Runtime>(app: &AppHandle<R>, cursor: PhysicalPosition<f64>) {
+    if app.get_webview_window(TRAY_WINDOW).is_none() {
+        if let Err(error) = create_tray_window(app) {
+            eprintln!("Failed to create tray popup: {error}");
+            restore_main_window(app);
+            return;
+        }
+    }
     let Some(window) = app.get_webview_window(TRAY_WINDOW) else {
         return;
     };

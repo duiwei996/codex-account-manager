@@ -5,7 +5,7 @@ use crate::auth::{
     import_from_auth_json_contents, load_accounts, read_current_auth, switch_to_account,
     sync_active_account_tokens, update_accounts, AUTH_OPERATION_LOCK,
 };
-use crate::types::AccountInfo;
+use crate::types::{AccountInfo, AccountSwitchMode};
 
 use super::process::ensure_codex_not_running;
 
@@ -76,15 +76,22 @@ pub async fn add_account_from_auth_json_text(
 /// Switch to a different account
 #[tauri::command]
 pub async fn switch_account(account_id: String, allow_running: Option<bool>) -> Result<(), String> {
-    switch_account_with_policy(&account_id, allow_running.unwrap_or(false)).await
+    switch_account_with_policy(&account_id, allow_running).await
 }
 
 pub async fn switch_account_by_id(account_id: &str) -> Result<(), String> {
-    switch_account_with_policy(account_id, false).await
+    switch_account_with_policy(account_id, None).await
 }
 
-async fn switch_account_with_policy(account_id: &str, allow_running: bool) -> Result<(), String> {
+async fn switch_account_with_policy(
+    account_id: &str,
+    allow_running: Option<bool>,
+) -> Result<(), String> {
     let _auth_guard = AUTH_OPERATION_LOCK.lock().await;
+    let mode = crate::auth::load_app_settings()
+        .map_err(|e| e.to_string())?
+        .account_switch_mode;
+    let direct = allow_running == Some(true) || mode == AccountSwitchMode::Direct;
     let _file_guard = crate::auth::lock_auth_files()
         .await
         .map_err(|e| e.to_string())?;
@@ -100,13 +107,9 @@ async fn switch_account_with_policy(account_id: &str, allow_running: bool) -> Re
         return Ok(());
     }
 
-    if !allow_running {
-        ensure_codex_not_running()?;
-    }
-
     // ChatGPT rotates single-use refresh tokens. Preserve the latest token
     // before replacing auth.json, otherwise switching back restores a stale one.
-    let previous_auth = read_current_auth().map_err(|e| e.to_string())?;
+    let mut previous_auth = read_current_auth().map_err(|e| e.to_string())?;
     if let Some(auth) = previous_auth.as_ref() {
         update_accounts(|current| {
             sync_active_account_tokens(current, &auth);
@@ -118,6 +121,30 @@ async fn switch_account_with_policy(account_id: &str, allow_running: bool) -> Re
     let account = ensure_chatgpt_tokens_fresh_locked(&store.accounts[target_index])
         .await
         .map_err(|e| e.to_string())?;
+
+    // Keep the entire close -> credential transaction -> reopen sequence serialized.
+    // Refresh the target credentials first so a failed refresh never closes the app.
+    let reopen_token = if !direct {
+        let result = super::kill_codex_processes(Some(true), Some(true)).await?;
+        if !result.failed_pids.is_empty() {
+            return Err(
+                "Could not close all Codex processes; account switching was cancelled".into(),
+            );
+        }
+        ensure_codex_not_running()?;
+        // Closing may flush the active session's last rotated tokens to auth.json.
+        previous_auth = read_current_auth().map_err(|e| e.to_string())?;
+        if let Some(auth) = previous_auth.as_ref() {
+            update_accounts(|current| {
+                sync_active_account_tokens(current, auth);
+                Ok(())
+            })
+            .map_err(|e| e.to_string())?;
+        }
+        result.reopen_token
+    } else {
+        None
+    };
 
     // Write to ~/.codex/auth.json
     switch_to_account(&account).map_err(|e| e.to_string())?;
@@ -150,8 +177,11 @@ async fn switch_account_with_policy(account_id: &str, allow_running: bool) -> Re
         });
     }
 
-    // Deliberately do NOT terminate external Codex/IDE processes after switching.
-    // Other applications must restart their own sessions or use an explicit close flow.
+    if let Some(token) = reopen_token {
+        super::reopen_closed_codex_desktop(token)
+            .await
+            .map_err(|error| format!("Account switched, but reopening Codex failed: {error}"))?;
+    }
 
     Ok(())
 }

@@ -45,7 +45,12 @@ pub fn validate_store(store: &AccountsStore) -> Result<()> {
     let mut names = HashSet::new();
     for account in &store.accounts {
         validate_account(account)?;
-        if !ids.insert(&account.id) || !names.insert(account.name.trim()) {
+        if !ids.insert(&account.id)
+            || !names.insert((
+                account.name.trim(),
+                super::storage::display_name_type(account),
+            ))
+        {
             anyhow::bail!("Duplicate account identifier or name");
         }
     }

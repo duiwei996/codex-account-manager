@@ -274,5 +274,10 @@ export default {
   "minimal": "最小",
   "none": "无",
   "Recorded at": "记录时间",
-  "Account list": "账号列表"
+  "Account list": "账号列表",
+  "Click Login to open your browser and authenticate.": "点击登录后将自动打开浏览器进行登录。",
+  "Account switching": "账号切换方式",
+  "Force close and switch": "强制关闭并切换",
+  "Switch directly": "直接切换",
+  "Force switching closes Codex and reopens it after switching. Direct switching leaves Codex running.": "强制切换会关闭 Codex，切换成功后重新打开；直接切换不会关闭或重新打开 Codex。",
 } as Record<string, string>;
