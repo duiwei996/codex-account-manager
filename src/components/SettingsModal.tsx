@@ -6,6 +6,8 @@ import type { DockDisplayMode } from "../types";
 import { setLocale, tr, useLocale } from "../lib/i18n";
 import { normalizeTimedWarmupTimes } from "../lib/autoWarmup";
 import type { ThemeMode } from "../lib/theme";
+import type { AppUpdater } from "../hooks/useAppUpdater";
+import { UpdateSettings } from "./UpdateSettings";
 
 type TrayDisplayMode = "icon_and_session" | "active_usage_text" | "hidden";
 interface DisplaySettings {
@@ -15,6 +17,7 @@ interface DisplaySettings {
 }
 
 interface SettingsModalProps {
+  updater: AppUpdater;
   theme: ThemeMode;
   onThemeChange: (theme: ThemeMode) => void;
   autoWarmupEnabled: boolean;
@@ -30,6 +33,7 @@ interface SettingsModalProps {
 }
 
 export function SettingsModal({
+  updater,
   theme, onThemeChange,
   autoWarmupEnabled, autoWarmupLabel, onAutoWarmupChange, warmupAvailable,
   timedWarmupEnabled, timedWarmupTimes, timedWarmupLabel,
@@ -114,6 +118,7 @@ export function SettingsModal({
         </div>
         <div className="overflow-y-auto px-5 py-2">
           <div className="divide-y divide-gray-100 dark:divide-gray-800">
+            <UpdateSettings updater={updater} />
             <div className={rowClassName}>
               <label htmlFor="app-language" className={labelClassName}>{translate("Language")}</label>
               <CenteredSelect id="app-language" value={locale} onChange={(event) => setLocale(event.target.value as "zh-CN" | "en-US")} className={selectClassName}>

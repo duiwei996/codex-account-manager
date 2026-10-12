@@ -35,6 +35,6 @@ test("untrusted development builds never turn on the updater by default", () => 
   const cfg = JSON.parse(readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf8"));
   assert.equal(cfg.bundle.createUpdaterArtifacts, false);
   assert.equal(cfg.plugins?.updater, undefined);
-  const ui = readFileSync(new URL("../src/components/UpdateChecker.tsx", import.meta.url), "utf8");
+  const ui = readFileSync(new URL("../src/hooks/useAppUpdater.ts", import.meta.url), "utf8");
   assert.match(ui, /VITE_UPDATER_ENABLED/);
 });

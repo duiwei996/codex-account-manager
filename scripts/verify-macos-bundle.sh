@@ -26,7 +26,7 @@ verify_app() {
     echo "Error: application does not have the expected ad-hoc signature." >&2
     return 1
   fi
-  /usr/bin/lipo -verify_arch "$arch" "$app/Contents/MacOS/codex-account-manager"
+  /usr/bin/lipo "$app/Contents/MacOS/codex-account-manager" -verify_arch "$arch"
 }
 
 verify_app "$bundle_dir/macos/$app_name"

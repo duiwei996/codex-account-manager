@@ -8,6 +8,8 @@ import { getLocale, tr, useLocale } from "./lib/i18n";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useAccounts } from "./hooks/useAccounts";
 import { SettingsModal } from "./components/SettingsModal";
+import { UpdateChecker } from "./components/UpdateChecker";
+import { useAppUpdater } from "./hooks/useAppUpdater";
 import { finishForceClose } from "./lib/desktopReopen";
 import { useForceCloseCodexProcesses } from "./hooks/useForceCloseCodexProcesses";
 import { AccountCard, AddAccountModal, WindowResizeBorders } from "./components";
@@ -133,6 +135,7 @@ function readStoredTimedWarmupLedger(): Record<string, string> {
 
 function App() {
   const locale = useLocale();
+  const updater = useAppUpdater();
   const [webReadOnly, setWebReadOnly] = useState(!isTauriRuntime());
   useEffect(() => {
     document.documentElement.lang = locale;
@@ -1485,6 +1488,7 @@ function App() {
 
       {isSettingsOpen && (
         <SettingsModal
+          updater={updater}
           theme={themeMode}
           onThemeChange={setThemeMode}
           autoWarmupEnabled={autoWarmupAllEnabled}
@@ -1580,7 +1584,7 @@ function App() {
 
       {/* Import/Export Config Modal */}
       <AccountTransferModal open={isConfigModalOpen} mode={transferMode} accountId={exportAccountId} onClose={() => setIsConfigModalOpen(false)} onImported={async () => {const list = await loadAccounts(true);await refreshUsage(list);}} />
-      {/* The updater is enabled only in builds with project signing configuration. */}
+      <UpdateChecker updater={updater} settingsOpen={isSettingsOpen} />
 
     </div>
   );

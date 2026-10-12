@@ -1,91 +1,12 @@
-import { localizeError } from "../lib/errors";
+import { UpdateError } from "./UpdateError";
 import { tr, useLocale } from "../lib/i18n";
-import { useState, useEffect, useCallback, useRef } from "react";
-import type { Update } from "@tauri-apps/plugin-updater";
-import { isTauriRuntime } from "../lib/platform";
-import { installUpdate, type UpdateInstallationStatus } from "../lib/updateInstallation";
+import type { AppUpdater } from "../hooks/useAppUpdater";
 
-// Only release builds receive a signed updater configuration and perform checks.
-const SIGNED_UPDATER_ENABLED = import.meta.env.VITE_UPDATER_ENABLED === "true";
-const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
-
-type UpdateStatus =
-  | { kind: "idle" }
-  | { kind: "checking" }
-  | { kind: "available"; update: Update }
-  | UpdateInstallationStatus
-  | { kind: "error"; message: string };
-
-export function UpdateChecker() {
+export function UpdateChecker({ updater, settingsOpen }: { updater: AppUpdater; settingsOpen: boolean }) {
   const locale = useLocale();
   const t = (text: string) => tr(text, locale);
-  const [status, setStatus] = useState<UpdateStatus>({ kind: "idle" });
-  const [dismissed, setDismissed] = useState(false);
-  const checkInFlightRef = useRef(false);
-
-  const checkForUpdate = useCallback(async () => {
-    if (!SIGNED_UPDATER_ENABLED || !isTauriRuntime() || checkInFlightRef.current) return;
-
-    checkInFlightRef.current = true;
-    try {
-      setStatus({ kind: "checking" });
-      setDismissed(false);
-      const { check } = await import("@tauri-apps/plugin-updater");
-      const update = await check();
-      if (update) {
-        setStatus({ kind: "available", update });
-      } else {
-        setStatus({ kind: "idle" });
-      }
-    } catch (err) {
-      console.error("Update check failed:", err);
-      setStatus({ kind: "idle" });
-    } finally {
-      checkInFlightRef.current = false;
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!SIGNED_UPDATER_ENABLED || !isTauriRuntime()) return;
-
-    void checkForUpdate();
-
-    const interval = window.setInterval(() => {
-      void checkForUpdate();
-    }, UPDATE_CHECK_INTERVAL_MS);
-
-    return () => window.clearInterval(interval);
-  }, [checkForUpdate]);
-
-  const handleDownloadAndInstall = async () => {
-    if (status.kind !== "available") return;
-    const { update } = status;
-
-    try {
-      if (!isTauriRuntime()) return;
-      await installUpdate(update, setStatus);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error("Update install failed:", err);
-      setStatus({ kind: "error", message });
-    }
-  };
-
-  const handleRelaunch = async () => {
-    try {
-      if (!isTauriRuntime()) return;
-      const { relaunch } = await import("@tauri-apps/plugin-process");
-      await relaunch();
-    } catch (err) {
-      console.error("Relaunch failed:", err);
-    }
-  };
-
-  if (!SIGNED_UPDATER_ENABLED || !isTauriRuntime()) {
-    return null;
-  }
-
-  if (status.kind === "idle" || status.kind === "checking" || dismissed) {
+  const { status, dismissed } = updater;
+  if (!updater.enabled || settingsOpen || status.kind === "idle" || status.kind === "checking" || status.kind === "current" || dismissed) {
     return null;
   }
 
@@ -112,13 +33,13 @@ export function UpdateChecker() {
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <button
-                onClick={() => setDismissed(true)}
+              onClick={updater.dismiss}
                 className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors"
               >
                 {t("Later")}
               </button>
               <button
-                onClick={handleDownloadAndInstall}
+                onClick={() => void updater.downloadAndInstall()}
                 className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-gray-200 text-white dark:text-gray-900 transition-colors"
               >
                 {t("Update")}
@@ -163,13 +84,13 @@ export function UpdateChecker() {
             </p>
             <div className="flex items-center gap-2 shrink-0">
               <button
-                onClick={() => setDismissed(true)}
+                onClick={updater.dismiss}
                 className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors"
               >
                 {t("Later")}
               </button>
               <button
-                onClick={handleRelaunch}
+                onClick={() => void updater.restart()}
                 className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-gray-200 text-white dark:text-gray-900 transition-colors"
               >
                 {t("Restart")}
@@ -180,11 +101,9 @@ export function UpdateChecker() {
 
         {status.kind === "error" && (
           <div className="flex items-center justify-between">
-            <p className="text-sm text-red-600 dark:text-red-300">
-              {t("Update failed:")} {localizeError(status.message)}
-            </p>
+            <UpdateError phase={status.phase} message={status.message} />
             <button
-              onClick={() => setDismissed(true)}
+              onClick={updater.dismiss}
               className="px-3 py-1.5 text-xs font-medium rounded-lg bg-gray-100 hover:bg-gray-200 dark:bg-gray-800 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-300 transition-colors shrink-0 ml-2"
             >
               {t("Dismiss")}
