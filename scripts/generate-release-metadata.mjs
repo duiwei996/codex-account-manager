@@ -11,8 +11,9 @@ export function generateReleaseMetadata(release, version, readSignature) {
   const prefix = `^Codex[ .]Account[ .]Manager_${escapedVersion}_`;
   const patterns = {
     "linux-x86_64": [new RegExp(prefix + "amd64\\.AppImage$")],
-    // Match tauri-action's existing preference for MSI over NSIS.
-    "windows-x86_64": [new RegExp(prefix + "x64_[A-Za-z-]+\\.msi$"), new RegExp(prefix + "x64-setup\\.exe$")],
+    // Updates use the NSIS installer's in-place upgrade and shortcut preservation.
+    // Never fall back to MSI: the updater arguments and installed layout differ.
+    "windows-x86_64": [new RegExp(prefix + "x64-setup\\.exe$")],
     "darwin-aarch64": [new RegExp(prefix + "aarch64\\.app\\.tar\\.gz$")],
     "darwin-x86_64": [new RegExp(prefix + "x64\\.app\\.tar\\.gz$")],
   };

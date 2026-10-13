@@ -66,6 +66,7 @@ function Clear-TestRegistry {
 $cases = @(
     @{ Name = 'fresh-install'; Installed = $null; Exit = 0 },
     @{ Name = 'upgrade-without-uninstall'; Installed = $older; Exit = 0 },
+    @{ Name = 'updater-upgrade-without-uninstall'; Installed = $older; Exit = 0; Update = $true },
     @{ Name = 'same-version-reinstall-without-uninstall'; Installed = $version; Exit = 0 },
     @{ Name = 'unknown-version-update-without-uninstall'; Installed = ''; Exit = 0 },
     @{ Name = 'reject-downgrade-without-uninstall'; Installed = $newer; Exit = 1 }
@@ -91,7 +92,10 @@ try {
         }
         # Exercise the generated production installer against isolated paths and registry keys.
         # /NS prevents shortcuts, and omitting /R prevents launching the application.
-        $process = Start-Process -FilePath $testInstaller -ArgumentList @('/S', '/NS', ('/D=' + $installDirectory)) -PassThru -WindowStyle Hidden
+        $installerArguments = @('/S', '/NS')
+        if ($case.Update) { $installerArguments += '/UPDATE' }
+        $installerArguments += '/D=' + $installDirectory
+        $process = Start-Process -FilePath $testInstaller -ArgumentList $installerArguments -PassThru -WindowStyle Hidden
         if (-not $process.WaitForExit(30000)) { $process.Kill(); throw 'Isolated installer timed out.' }
         if ($process.ExitCode -ne $case.Exit) { throw "Wrong installer exit code: $($case.Name), $($process.ExitCode)" }
         if ([IO.File]::ReadAllText($sentinel) -ne 'synthetic user settings') { throw 'Existing settings were changed.' }
@@ -108,4 +112,4 @@ try {
 } finally {
     Clear-TestRegistry
 }
-Write-Output "5 production-installer scenarios passed; existing settings preserved and old uninstaller never invoked. Evidence: $testRoot"
+Write-Output "$($cases.Count) production-installer scenarios passed; existing settings preserved and old uninstaller never invoked. Evidence: $testRoot"

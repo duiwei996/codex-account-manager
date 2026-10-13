@@ -28,7 +28,8 @@ test("parallel completion order does not change the complete updater manifest", 
   input.release.assets.reverse();
   assert.deepEqual(generate(input), result);
   assert.deepEqual(Object.keys(result.platforms).sort(), ["darwin-aarch64", "darwin-x86_64", "linux-x86_64", "windows-x86_64"]);
-  assert.match(result.platforms["windows-x86_64"].url, /x64_en-US\.msi$/);
+  assert.match(result.platforms["windows-x86_64"].url, /x64-setup\.exe$/);
+  assert.equal(result.platforms["windows-x86_64"].signature, "signature-2");
   assert.equal(result.platforms["darwin-aarch64"].signature, "signature-3");
   assert.equal(result.notes, "Release notes");
 });
@@ -39,8 +40,14 @@ test("NSIS is supported when the release has no MSI", () => {
   assert.match(generate(input).platforms["windows-x86_64"].url, /x64-setup\.exe$/);
 });
 
+test("an MSI-only release cannot silently replace the Windows NSIS update", () => {
+  const input = fixture();
+  input.release.assets = input.release.assets.filter(asset => !asset.name.includes("-setup.exe"));
+  assert.throws(() => generate(input), /Expected exactly one updater package for windows-x86_64/);
+});
+
 test("incomplete platforms and missing or empty signatures stop publication", () => {
-  for (const suffix of ["_amd64.AppImage", "_aarch64.app.tar.gz", "_x64.app.tar.gz", "_x64_en-US.msi.sig"]) {
+  for (const suffix of ["_amd64.AppImage", "_aarch64.app.tar.gz", "_x64.app.tar.gz", "_x64-setup.exe.sig"]) {
     const input = fixture();
     input.release.assets = input.release.assets.filter(asset => !asset.name.endsWith(suffix));
     assert.throws(() => generate(input));

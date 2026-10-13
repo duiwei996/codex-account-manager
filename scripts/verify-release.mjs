@@ -25,6 +25,9 @@ export function verifyRelease(metadata, assets, version) {
     const entry = metadata.platforms?.[platform];
     if (!entry?.signature || typeof entry.signature !== "string" || !entry.url?.startsWith(prefix)) throw new Error(`Missing or invalid signed platform: ${platform}`);
     const filename = decodeURIComponent(new URL(entry.url).pathname.split("/").at(-1));
+    if (platform === "windows-x86_64" && !/^Codex[ .]Account[ .]Manager_\d+\.\d+\.\d+_x64-setup\.exe$/.test(filename)) {
+      throw new Error("Windows updates must use the signed NSIS setup.exe installer");
+    }
     if (!names.has(filename) || !names.has(filename + ".sig")) throw new Error(`Missing updater package/signature for ${platform}`);
   }
   return true;
