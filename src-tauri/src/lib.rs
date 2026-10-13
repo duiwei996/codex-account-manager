@@ -27,9 +27,17 @@ use tauri::Emitter;
 pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(desktop)]
-    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _, _| {
-        commands::restore_main_window(app);
-    }));
+    let builder = builder
+        .plugin(tauri_plugin_single_instance::init(|app, args, _| {
+            if !args.iter().any(|arg| arg == "--autostart") {
+                commands::restore_main_window(app);
+            }
+        }))
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .args(["--autostart"])
+                .build(),
+        );
     builder
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -37,16 +45,18 @@ pub fn run() {
         .setup(|app| {
             #[cfg(desktop)]
             {
-                // The plugin is registered, but only signed Release builds embed
-                // an updater public key and enable the frontend update checker.
-                // Test builds do not register the updater or require a public key.
-                // VITE_UPDATER_ENABLED is embedded at compile time for signed releases only.
+                // Local installers and signed releases enable updates when built
+                // with the official update endpoint and public verification key.
+                // Development builds leave the compile-time flag unset.
                 if option_env!("VITE_UPDATER_ENABLED") == Some("true") {
                     app.handle()
                         .plugin(tauri_plugin_updater::Builder::new().build())?;
                 }
                 app_menu::setup(app.handle())?;
                 tray::setup(app.handle())?;
+                if let Err(error) = commands::initialize_startup(app.handle()) {
+                    eprintln!("Startup settings could not be applied: {error}");
+                }
             }
             Ok(())
         })
@@ -78,6 +88,8 @@ pub fn run() {
             import_accounts_json_file,
             import_accounts_json_files,
             commands::get_display_settings,
+            commands::get_runtime_preferences,
+            commands::set_runtime_preferences,
             commands::set_ui_language,
             commands::set_tray_display_mode,
             commands::set_account_switch_mode,

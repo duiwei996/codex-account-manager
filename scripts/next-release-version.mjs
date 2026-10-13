@@ -1,33 +1,29 @@
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
+import { parseVersion, verifyProjectVersion } from "./project-version.mjs";
 
+// Select only the explicitly requested VERSION; never invent a release number.
 export function nextReleaseVersion(base, tags) {
-  const parse = value => {
-    const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(value);
-    if (!match) return null;
-    const parts = match.slice(1).map(Number);
-    if (parts.some(n => !Number.isSafeInteger(n) || n > 4294967295)) throw new Error("Invalid version number");
-    return parts;
-  };
-  let highest = parse(base);
-  if (!highest) throw new Error("Invalid project version");
-  let baseAlreadyReserved = false;
+  const requested = parseVersion(base);
+  let used = false;
   for (const tag of tags) {
-    if (!tag.startsWith("v")) continue;
-    const candidate = parse(tag.slice(1));
-    if (!candidate) continue;
-    const difference = candidate.findIndex((n, i) => n !== highest[i]);
-    if (difference === -1 || (difference >= 0 && candidate[difference] > highest[difference])) baseAlreadyReserved = true;
-    if (difference >= 0 && candidate[difference] > highest[difference]) highest = candidate;
+    if (!/^v\d+\.\d+\.\d+$/.test(tag)) continue;
+    const candidate = parseVersion(tag.slice(1));
+    const difference = candidate.findIndex((part, index) => part !== requested[index]);
+    if (difference >= 0 && candidate[difference] > requested[difference]) throw new Error(`VERSION ${base} is older than existing ${tag}. Set the intended release version explicitly.`);
+    if (difference === -1) used = true;
   }
-  if (!baseAlreadyReserved) return base;
-  if (highest[2] === 4294967295) throw new Error("Patch version overflow");
-  return `${highest[0]}.${highest[1]}.${highest[2] + 1}`;
+  return used ? null : base;
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {
-  const base = JSON.parse(readFileSync("package.json", "utf8")).version;
-  const tags = readFileSync(process.argv[2], "utf8").split(/\r?\n/);
-  console.log(nextReleaseVersion(base, tags));
+  try {
+    const version = verifyProjectVersion();
+    const tags = readFileSync(process.argv[2], "utf8").split(/\r?\n/);
+    console.log(nextReleaseVersion(version, tags) ?? "");
+  } catch (error) {
+    console.error(error.message);
+    process.exitCode = 1;
+  }
 }

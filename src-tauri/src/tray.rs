@@ -15,8 +15,8 @@ use tauri::{
 };
 
 use crate::{
-    api::usage::get_account_usage,
-    auth::{get_account, get_accounts_file, load_accounts, load_app_settings},
+    api::usage::refresh_all_usage,
+    auth::{get_accounts_file, load_accounts, load_app_settings},
     commands::{
         is_codex_running_switch_block, restore_main_window, switch_account_by_id,
         window::TRAY_WINDOW,
@@ -89,7 +89,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     watch_accounts_file(app.clone());
     #[cfg(target_os = "windows")]
     watch_system_theme(app.clone());
-    poll_active_account_usage(app.clone());
+    poll_account_usage(app.clone());
     poll_account_metadata(app.clone());
     Ok(())
 }
@@ -703,24 +703,36 @@ fn modified_at(path: &std::path::Path) -> Option<std::time::SystemTime> {
         .ok()
 }
 
-/// Poll the active account's usage so the tray title stays fresh even when the
-/// main window's webview poller is hidden or suspended by the OS.
-fn poll_active_account_usage<R: Runtime>(app: AppHandle<R>) {
-    std::thread::spawn(move || loop {
-        let account = load_accounts()
-            .ok()
-            .and_then(|store| store.active_account_id)
-            .and_then(|id| get_account(&id).ok().flatten());
-
-        if let Some(account) = account {
-            match tauri::async_runtime::block_on(get_account_usage(&account)) {
-                // Keep the last known title on transient fetch errors.
-                Ok(usage) => ingest_usage(&app, vec![usage]),
-                Err(error) => eprintln!("Failed to poll usage for tray title: {error}"),
+/// Own desktop automatic polling regardless of webview visibility or suspension.
+fn poll_account_usage<R: Runtime>(app: AppHandle<R>) {
+    std::thread::spawn(move || {
+        let mut last_poll = std::time::Instant::now();
+        loop {
+            std::thread::sleep(Duration::from_secs(1));
+            let settings = crate::auth::load_app_settings().unwrap_or_default();
+            let visible = app.get_webview_window("main").is_some_and(|window| {
+                window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(false)
+            });
+            let delay = Duration::from_secs(settings.usage_refresh_delay_seconds(visible));
+            if last_poll.elapsed() < delay {
+                continue;
             }
+            let store = load_accounts().unwrap_or_default();
+            let accounts: Vec<_> = store
+                .accounts
+                .into_iter()
+                .filter(|account| {
+                    settings.refresh_scope == crate::types::RefreshScope::All
+                        || store.active_account_id.as_deref() == Some(account.id.as_str())
+                })
+                .collect();
+            let usages = tauri::async_runtime::block_on(refresh_all_usage(&accounts));
+            if !usages.is_empty() {
+                ingest_usage(&app, usages.clone());
+                let _ = app.emit("background-usage-updated", usages);
+            }
+            last_poll = std::time::Instant::now();
         }
-
-        std::thread::sleep(Duration::from_secs(60));
     });
 }
 
@@ -728,8 +740,18 @@ fn poll_active_account_usage<R: Runtime>(app: AppHandle<R>) {
 /// suspended. Live metadata stays in memory and is announced to the webviews.
 fn poll_account_metadata<R: Runtime>(app: AppHandle<R>) {
     std::thread::spawn(move || loop {
+        let settings = crate::auth::load_app_settings().unwrap_or_default();
         let accounts = load_accounts()
-            .map(|store| store.accounts)
+            .map(|store| {
+                store
+                    .accounts
+                    .into_iter()
+                    .filter(|account| {
+                        settings.refresh_scope == crate::types::RefreshScope::All
+                            || store.active_account_id.as_deref() == Some(account.id.as_str())
+                    })
+                    .collect::<Vec<_>>()
+            })
             .unwrap_or_default();
 
         for account in accounts {

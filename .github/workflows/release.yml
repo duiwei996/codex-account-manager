@@ -33,7 +33,7 @@ jobs:
         with:
           node-version: '22'
           package-manager-cache: false
-      - name: Select the next release version
+      - name: Read VERSION and check whether it is already reserved
         id: version
         shell: bash
         run: |
@@ -41,17 +41,25 @@ jobs:
           gh api --paginate "repos/${{ github.repository }}/releases?per_page=100" --jq '.[].tag_name' >> version-tags.txt
           version="$(node scripts/next-release-version.mjs version-tags.txt)"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ -n "$version" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "VERSION is already reserved; skipping release without incrementing it."
+          fi
       - name: Create the shared draft release
+        if: steps.version.outputs.publish == 'true'
         id: release
         run: node scripts/create-draft-release.mjs "${{ steps.version.outputs.version }}"
     outputs:
       version: ${{ steps.version.outputs.version }}
+      publish: ${{ steps.version.outputs.publish }}
       release-id: ${{ steps.release.outputs.release-id }}
 
   signed-bundles:
     needs: preflight
-    # All platforms build the same reserved version from main.
-    if: ${{ github.repository == 'duiwei996/codex-account-manager' && github.ref == 'refs/heads/main' }}
+    # All platforms build the exact VERSION from the same main commit.
+    if: ${{ github.repository == 'duiwei996/codex-account-manager' && github.ref == 'refs/heads/main' && needs.preflight.outputs.publish == 'true' }}
     runs-on: ${{ matrix.os }}
     env:
       CODEX_SWITCHER_BUILD_TARGET: ${{ matrix.target }}
@@ -109,8 +117,8 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Tests
         run: pnpm test
-      - name: Set release version
-        run: node scripts/bump-version.mjs ${{ needs.preflight.outputs.version }}
+      - name: Verify release version
+        run: node scripts/project-version.mjs --check ${{ needs.preflight.outputs.version }}
       - name: Validate production updater signing configuration
         env:
           TAURI_UPDATER_PUBLIC_KEY: ${{ vars.TAURI_UPDATER_PUBLIC_KEY }}
@@ -136,6 +144,7 @@ jobs:
 
   publish:
     needs: [preflight, signed-bundles]
+    if: needs.preflight.outputs.publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write # required to inspect unpublished draft Releases
@@ -147,12 +156,12 @@ jobs:
         with:
           node-version: '22'
           package-manager-cache: false
-      - name: Set release version
-        run: node scripts/bump-version.mjs ${{ needs.preflight.outputs.version }}
+      - name: Verify release version
+        run: node scripts/project-version.mjs --check ${{ needs.preflight.outputs.version }}
       - name: Check and publish the complete release
         shell: bash
         run: |
-          version="$(node -p "require('./package.json').version")"
+          version="$(cat VERSION | tr -d '\r\n')"
           gh release view "v${version}" --json tagName,isDraft,assets,body,createdAt > release-assets.json
           gh release download "v${version}" --pattern '*.sig' --dir release-review
           node scripts/generate-release-metadata.mjs release-assets.json release-review release-review/latest.json

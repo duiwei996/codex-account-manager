@@ -1,3 +1,4 @@
+import { readStatsCache, writeStatsCache } from "../lib/accountCache";
 import { ActionIcon } from "./ActionIcon";
 import { getLocale, tr, useLocale } from "../lib/i18n";
 import { useCallback, useState, useRef, useEffect } from "react";
@@ -131,7 +132,7 @@ export function AccountCard({
   const [resetCredits, setResetCredits] = useState<AccountResetCredits | null>(null);
   const [statsOpen, setStatsOpen] = useState(false);
   const closeStats = useCallback(() => setStatsOpen(false), []);
-  const [usageStats, setUsageStats] = useState<AccountUsageStatsInfo | null>(null);
+  const [usageStats, setUsageStats] = useState<AccountUsageStatsInfo | null>(() => readStatsCache(account.id));
   const inputRef = useRef<HTMLInputElement>(null);
   const resetRequestSeq = useRef(0);
 
@@ -213,7 +214,7 @@ export function AccountCard({
       });
       if (requestId !== resetRequestSeq.current) return;
       setResetCredits(stats.account_id === account.id ? stats.reset_credits : null);
-      if (stats.account_id === account.id && stats.available && !stats.error) setUsageStats(stats);
+      if (stats.account_id === account.id && stats.available && !stats.error) { writeStatsCache(stats); setUsageStats({ ...stats, from_cache: false }); }
     } catch {
       if (requestId !== resetRequestSeq.current) return;
       setResetCredits(null);
@@ -224,14 +225,14 @@ export function AccountCard({
     (stats: AccountUsageStatsInfo | null) => {
       if (!stats || stats.account_id !== account.id) return;
       setResetCredits(stats.reset_credits);
-      if (stats.available && !stats.error) setUsageStats(stats);
+      if (stats.available && !stats.error) { writeStatsCache(stats); setUsageStats({ ...stats, from_cache: false }); }
     },
     [account.id]
   );
 
   useEffect(() => {
     setResetCredits(null);
-    setUsageStats(null);
+    setUsageStats(readStatsCache(account.id));
     setStatsOpen(false);
 
     void loadResetCredits();
@@ -327,6 +328,7 @@ export function AccountCard({
         <section className="min-w-0 rounded-xl bg-gray-50 p-3 dark:bg-gray-950/40">
           <h4 className="mb-3 text-xs font-medium text-gray-500 dark:text-gray-400">{locale === "zh-CN" ? "账号额度" : "Allowance"}</h4>
           <UsageBar usage={account.usage} loading={isRefreshing || account.usageLoading} />
+          {account.usage?.error && <button onClick={() => void handleRefresh().catch(() => {})} disabled={isRefreshing || account.usageLoading} className="mt-2 text-xs font-medium text-blue-600 hover:underline disabled:opacity-50 dark:text-blue-400">{t("Retry")}</button>}
         </section>
         {account.is_active && (
           <section className="min-w-0 rounded-xl bg-gray-50 p-3 dark:bg-gray-950/40">

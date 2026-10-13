@@ -5,12 +5,13 @@ import { useLocale } from "../lib/i18n";
 import { invokeBackend } from "../lib/platform";
 import { maskAccountJson, type ExportDocument, type ExportFormat } from "../lib/accountTransfer";
 import type { ImportAccountsSummary } from "../types";
-interface Props { open: boolean; mode: "export" | "import"; accountId: string | null; onClose: () => void; onImported: () => Promise<void> }
+interface Props { open: boolean; mode: "export" | "import"; accountId: string | null; onClose: () => void; onImported: (summary: ImportAccountsSummary) => Promise<void> }
 export function AccountTransferModal(props: Props) {
   return <AccountTransferForm key={`${props.open}:${props.mode}:${props.accountId ?? "all"}`} {...props} />;
 }
 
-function AccountTransferForm({open: visible,mode,accountId,onClose,onImported}: Props) {
+function AccountTransferForm({open: visible,mode: initialMode,accountId,onClose,onImported}: Props) {
+  const [mode, setMode] = useState(initialMode);
   const locale = useLocale();
   const label = (zh: string,en: string) => locale === "zh-CN" ? zh : en;
   const [format,setFormat] = useState<ExportFormat>(accountId ? "official" : "all");
@@ -64,7 +65,7 @@ function AccountTransferForm({open: visible,mode,accountId,onClose,onImported}: 
       const summary = files
         ? await invokeBackend<ImportAccountsSummary>("import_accounts_json_files",{paths})
         : await invokeBackend<ImportAccountsSummary>("import_accounts_json",{payload});
-      await onImported();setPayload("");
+      await onImported(summary);setPayload("");
       setNotice(label(`导入完成：已处理 ${summary.imported_count} 个账号`, `Import completed: processed ${summary.imported_count} accounts`));
     }catch(error){setError(String(error));}finally{setBusy(false);}
   }
@@ -72,10 +73,18 @@ function AccountTransferForm({open: visible,mode,accountId,onClose,onImported}: 
   return <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label={label("账号导入导出","Account transfer")}>
     <div className="flex max-h-[90vh] w-full max-w-4xl flex-col rounded-2xl bg-white shadow-xl dark:bg-gray-900 dark:text-gray-100">
       <div className="flex items-center justify-between border-b border-gray-200 p-5 dark:border-gray-700">
-        <h2 className="text-xl font-semibold">{mode === "export"?label("导出 JSON","Export JSON"):label("导入 JSON","Import JSON")}</h2>
+        <h2 className="text-xl font-semibold">{accountId ? label("导出 JSON","Export JSON") : label("导入 / 导出","Import / Export")}</h2>
         <button className={button} onClick={onClose} disabled={busy} aria-label={label("关闭","Close")}>✕</button>
       </div>
       <div className="space-y-4 overflow-y-auto p-5">
+        {!accountId && <div role="tablist" aria-label={label("导入 / 导出", "Import / Export")} className="flex gap-1 rounded-xl bg-gray-100 p-1 dark:bg-gray-800">
+          {(["import", "export"] as const).map(tab => <button key={tab} id={`transfer-${tab}-tab`} role="tab" aria-selected={mode === tab} aria-controls="transfer-panel" tabIndex={mode === tab ? 0 : -1} disabled={busy} onClick={() => setMode(tab)}
+            onKeyDown={event => { if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) { event.preventDefault(); const next = event.key === "Home" ? "import" : event.key === "End" ? "export" : tab === "import" ? "export" : "import"; setMode(next); document.getElementById(`transfer-${next}-tab`)?.focus(); } }}
+            className={`flex-1 rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50 ${mode === tab ? "bg-white text-blue-600 shadow-sm dark:bg-gray-700 dark:text-blue-300" : "text-gray-500 dark:text-gray-400"}`}>
+            {tab === "import" ? label("导入", "Import") : label("导出", "Export")}
+          </button>)}
+        </div>}
+        <div id="transfer-panel" role={accountId ? undefined : "tabpanel"} aria-labelledby={accountId ? undefined : `transfer-${mode}-tab`} className="space-y-4">
         {mode === "export" ? <>
           <label className="flex items-center gap-4 text-sm font-medium">{label("导出格式","Export format")}
             <CenteredSelect className={button} value={format} disabled={busy} onChange={event=>setFormat(event.target.value as ExportFormat)}>
@@ -100,6 +109,7 @@ function AccountTransferForm({open: visible,mode,accountId,onClose,onImported}: 
           <textarea className="h-64 w-full rounded-xl border border-gray-200 bg-gray-50 p-4 font-mono text-sm dark:border-gray-700 dark:bg-gray-800" value={payload} disabled={busy} onChange={event=>setPayload(event.target.value)} aria-label={label("粘贴账号 JSON","Paste account JSON")} spellCheck={false}/>
           <button className={button} disabled={busy||!payload.trim()} onClick={()=>void importJson(false)}>{label("导入粘贴内容","Import pasted JSON")}</button>
         </>}
+        </div>
         {busy&&<p role="status">{label("正在处理…","Processing…")}</p>}
         {notice&&<p className="text-sm text-green-700 dark:text-green-300" role="status">{notice}</p>}
         {error&&<p className="text-sm text-red-600 dark:text-red-300" role="alert">{localizeError(error)}</p>}

@@ -2,12 +2,12 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Codex Account Manager",
   "mainBinaryName": "codex-account-manager",
-  "version": "1.0.1",
+  "version": "1.0.5",
   "identifier": "com.duiwei996.codex-switcher-cn",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
-    "beforeBuildCommand": "pnpm licenses:generate && pnpm build",
+    "beforeBuildCommand": "node scripts/verify-local-build-version.mjs && pnpm licenses:generate && pnpm build",
     "frontendDist": "../dist"
   },
   "app": {

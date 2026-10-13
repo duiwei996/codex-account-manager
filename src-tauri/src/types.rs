@@ -48,9 +48,22 @@ pub enum AccountSwitchMode {
     ForceClose,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RefreshScope {
+    #[default]
+    Current,
+    All,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppSettings {
+    pub autostart_initialized: bool,
+    pub startup_minimized: bool,
+    pub automatic_update_checks: bool,
+    pub refresh_scope: RefreshScope,
+    pub refresh_interval_seconds: u64,
     pub account_switch_mode: AccountSwitchMode,
     pub tray_display_mode: TrayDisplayMode,
     pub dock_display_mode: DockDisplayMode,
@@ -62,12 +75,28 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            autostart_initialized: false,
+            startup_minimized: true,
+            automatic_update_checks: true,
+            refresh_scope: RefreshScope::Current,
+            refresh_interval_seconds: 60,
             account_switch_mode: AccountSwitchMode::default(),
             tray_display_mode: TrayDisplayMode::default(),
             dock_display_mode: DockDisplayMode::default(),
             ui_language: "zh-CN".to_string(),
             close_behavior_prompt_enabled: true,
         }
+    }
+}
+
+impl AppSettings {
+    pub fn usage_refresh_delay_seconds(&self, foreground: bool) -> u64 {
+        let interval = if [30, 60, 120, 300, 600].contains(&self.refresh_interval_seconds) {
+            self.refresh_interval_seconds
+        } else {
+            60
+        };
+        interval * if foreground { 1 } else { 5 }
     }
 }
 
@@ -455,6 +484,7 @@ pub struct WarmupSummary {
 /// Import summary for account config import operations.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImportAccountsSummary {
+    pub affected_account_ids: Vec<String>,
     /// Number of accounts found in the imported payload.
     pub total_in_payload: usize,
     /// Number of accounts actually imported.

@@ -1,3 +1,4 @@
+import { readStatsCache, writeStatsCache } from "../lib/accountCache";
 import { CenteredSelect } from "./CenteredSelect";
 import { createPortal } from "react-dom";
 import { ActionIcon } from "./ActionIcon";
@@ -363,7 +364,7 @@ export function AccountUsageStats({
   const locale = useLocale();
   const t = (text: string) => tr(text, locale);
   const dialogRef = useRef<HTMLElement>(null);
-  const [stats, setStats] = useState<AccountUsageStatsInfo | null>(null);
+  const [stats, setStats] = useState<AccountUsageStatsInfo | null>(() => readStatsCache(accountId));
   const [loading, setLoading] = useState(false);
   const requestSeq = useRef(0);
   const backgroundInFlight = useRef(false);
@@ -392,13 +393,18 @@ export function AccountUsageStats({
         accountId,
       });
       if (requestId !== requestSeq.current) return;
-      if (background && (!next.available || next.error)) return;
-      setStats(next);
+      if (next.account_id !== accountId) return;
+      if (!next.available || next.error) {
+        setStats(previous => previous?.available ? { ...previous, error: next.error } : next);
+      } else {
+        writeStatsCache(next);
+        setStats({ ...next, from_cache: false });
+      }
       onStatsLoaded?.(next);
     } catch (err) {
       if (background || requestId !== requestSeq.current) return;
       const next = emptyStats(accountId, err instanceof Error ? err.message : String(err));
-      setStats(next);
+      setStats(previous => previous?.available ? { ...previous, error: next.error } : next);
       onStatsLoaded?.(next);
     } finally {
       if (background) {
@@ -411,7 +417,7 @@ export function AccountUsageStats({
 
   useEffect(() => {
     requestSeq.current += 1;
-    setStats(null);
+    setStats(readStatsCache(accountId));
     onStatsLoaded?.(null);
     setLoading(false);
   }, [accountId, onStatsLoaded]);

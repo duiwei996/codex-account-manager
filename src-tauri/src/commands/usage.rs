@@ -20,6 +20,19 @@ static METADATA_REFRESH_TIMES: LazyLock<Mutex<HashMap<String, std::time::Instant
 static ACCOUNT_METADATA_CACHE: LazyLock<Mutex<HashMap<String, ChatGptAccountMetadata>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
+pub(crate) fn invalidate_account_metadata(account_ids: &[String]) {
+    if let Ok(mut times) = METADATA_REFRESH_TIMES.lock() {
+        for id in account_ids {
+            times.remove(id);
+        }
+    }
+    if let Ok(mut cache) = ACCOUNT_METADATA_CACHE.lock() {
+        for id in account_ids {
+            cache.remove(id);
+        }
+    }
+}
+
 pub(crate) fn apply_cached_account_metadata(account: &mut AccountInfo) {
     let Ok(cache) = ACCOUNT_METADATA_CACHE.lock() else {
         return;

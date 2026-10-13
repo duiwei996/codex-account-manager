@@ -16,6 +16,7 @@ export interface AccountInfo {
 }
 
 export interface UsageInfo {
+  from_cache?: boolean;
   /** Local timestamp of the last successful quota query. */
   recorded_at?: string;
   account_id: string;
@@ -83,6 +84,7 @@ export interface AccountResetCredits {
 }
 
 export interface AccountUsageStats {
+  from_cache?: boolean;
   account_id: string;
   available: boolean;
   source: string;
@@ -102,6 +104,7 @@ export interface OAuthLoginInfo {
 }
 
 export interface AccountWithUsage extends AccountInfo {
+  metadata_recorded_at?: string;
   usage?: UsageInfo;
   usageLoading?: boolean;
 }
@@ -120,6 +123,7 @@ export interface WarmupSummary {
 }
 
 export interface ImportAccountsSummary {
+  affected_account_ids: string[];
   total_in_payload: number;
   imported_count: number;
   skipped_count: number;

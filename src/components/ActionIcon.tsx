@@ -1,5 +1,6 @@
-type Action = "refresh" | "settings" | "import" | "export" | "warmup" | "delete" | "add" | "rename" | "stats" | "auto";
+type Action = "transfer" | "refresh" | "settings" | "import" | "export" | "warmup" | "delete" | "add" | "rename" | "stats" | "auto";
 const paths: Record<Action, string> = {
+  transfer: "M8 20V4 M4 8l4-4 4 4 M16 4v16 M12 16l4 4 4-4",
   rename: "M16 3l5 5 M4 20l4-1L21 6a2.8 2.8 0 0 0-4-4L4 15l-1 6Z",
   stats: "M4 3v18h17 M8 16v-4 M13 16V8 M18 16V5",
   auto: "M20 7v5h-5 M20 12a8 8 0 1 0-2.34 5.66 M12 7v5l3 2",

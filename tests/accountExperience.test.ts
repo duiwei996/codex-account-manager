@@ -45,7 +45,7 @@ test("refresh failure retains last known usage with an explicit stale error", ()
   assert.equal(previous.error,null);
   assert.equal(mergeUsageResult(undefined,failed),failed);
   const recovered = {...previous, primary_used_percent:30};
-  assert.deepEqual(mergeUsageResult(stale,recovered),recovered);
+  assert.deepEqual(mergeUsageResult(stale,recovered),{...recovered,from_cache:false});
 });
 
 test("partial account details survive errors and never migrate to another account", () => {

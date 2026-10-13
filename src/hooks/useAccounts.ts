@@ -6,13 +6,19 @@ import type {
   WarmupSummary,
 } from "../types";
 import { invokeBackend, isTauriRuntime, type FileSource } from "../lib/platform";
+import { readAccountCache, writeAccountCache } from "../lib/accountCache";
 import { mergeUsageResult } from "../lib/usageDisplay";
+import { refreshDelay, selectRefreshAccounts } from "../lib/refreshPolicy";
+import type { RuntimePreferences } from "./useRuntimePreferences";
 
-export function useAccounts() {
-  const [accounts, setAccounts] = useState<AccountWithUsage[]>([]);
-  const [loading, setLoading] = useState(true);
+export function useAccounts(preferences: RuntimePreferences, preferencesReady: boolean) {
+  const [accounts, setAccounts] = useState<AccountWithUsage[]>(readAccountCache);
+  const [loading, setLoading] = useState(() => readAccountCache().length === 0);
   const [error, setError] = useState<string | null>(null);
-  const accountsRef = useRef<AccountWithUsage[]>([]);
+  const accountsRef = useRef<AccountWithUsage[]>(accounts);
+  const [listReady, setListReady] = useState(false);
+  const initialUsageFetch = useRef(false);
+  const initialMetadataFetch = useRef(false);
   const metadataRefreshInFlightRef = useRef(new Set<string>());
   const maxConcurrentUsageRequests = 4;
   const loadGenerationRef = useRef(0);
@@ -29,7 +35,8 @@ export function useAccounts() {
 
   useEffect(() => {
     accountsRef.current = accounts;
-  }, [accounts]);
+    if (listReady) writeAccountCache(accounts);
+  }, [accounts, listReady]);
 
   const buildUsageError = useCallback(
     (accountId: string, message: string, planType: string | null): UsageInfo => ({
@@ -79,26 +86,23 @@ export function useAccounts() {
   const loadAccounts = useCallback(async (preserveUsage = false) => {
     const generation = ++loadGenerationRef.current;
     try {
-      setLoading(true);
+      if (!preserveUsage && accountsRef.current.length === 0) setLoading(true);
       setError(null);
       const accountList = await invokeBackend<AccountInfo[]>("list_accounts");
       if (generation !== loadGenerationRef.current) return [];
 
-      if (preserveUsage) {
-        // Preserve existing usage data when just updating account info
-        setAccounts((prev) => {
-          const usageMap = new Map(
-            prev.map((a) => [a.id, { usage: a.usage, usageLoading: a.usageLoading }])
-          );
-          return accountList.map((a) => ({
-            ...a,
-            usage: usageMap.get(a.id)?.usage,
-            usageLoading: usageMap.get(a.id)?.usageLoading,
-          }));
+      setAccounts(previous => {
+        const byId = new Map(previous.map(account => [account.id, account]));
+        return accountList.map(account => {
+          const cached = byId.get(account.id);
+          return { ...account,
+            plan_type: account.plan_type ?? cached?.plan_type ?? null,
+            subscription_expires_at: account.subscription_expires_at ?? cached?.subscription_expires_at ?? null,
+            metadata_recorded_at: cached?.metadata_recorded_at,
+            usage: cached?.usage, usageLoading: cached?.usageLoading ?? false };
         });
-      } else {
-        setAccounts(accountList.map((a) => ({ ...a, usageLoading: false })));
-      }
+      });
+      setListReady(true);
       return accountList;
     } catch (err) {
       if (generation === loadGenerationRef.current) setError(err instanceof Error ? err.message : String(err));
@@ -137,6 +141,7 @@ export function useAccounts() {
                       ...item,
                       plan_type: metadata.plan_type ?? item.plan_type,
                       subscription_expires_at: metadata.subscription_expires_at ?? item.subscription_expires_at,
+                      metadata_recorded_at: new Date().toISOString(),
                     }
                   : item
               )
@@ -272,13 +277,15 @@ export function useAccounts() {
     }
   }, [buildUsageError, refreshMetadata, reportUsageToTray, requestUsage]);
 
-  const warmupAccount = useCallback(async (accountId: string) => {
-    try {
-      await invokeBackend("warmup_account", { accountId });
-    } catch (err) {
-      console.error("Failed to warm up account:", err);
-      throw err;
-    }
+  const warmupInFlight = useRef(new Map<string, Promise<void>>());
+  const warmupAccount = useCallback((accountId: string): Promise<void> => {
+    const pending = warmupInFlight.current.get(accountId);
+    if (pending) return pending;
+    const request = invokeBackend<void>("warmup_account", { accountId }).finally(() => {
+      if (warmupInFlight.current.get(accountId) === request) warmupInFlight.current.delete(accountId);
+    });
+    warmupInFlight.current.set(accountId, request);
+    return request;
   }, []);
 
   const warmupAllAccounts = useCallback(async () => {
@@ -331,17 +338,18 @@ export function useAccounts() {
   const importFromFile = useCallback(
     async (source: FileSource, name: string) => {
       try {
+        let imported: AccountInfo;
         if (typeof source === "string") {
-          await invokeBackend<AccountInfo>("add_account_from_file", { path: source, name });
+          imported = await invokeBackend<AccountInfo>("add_account_from_file", { path: source, name });
         } else {
           const contents = await source.text();
-          await invokeBackend<AccountInfo>("add_account_from_auth_json_text", {
+          imported = await invokeBackend<AccountInfo>("add_account_from_auth_json_text", {
             name,
             contents,
           });
         }
-        const accountList = await loadAccounts();
-        await refreshUsage(accountList);
+        const accountList = await loadAccounts(true);
+        await refreshUsage(accountList.filter(account => account.id === imported.id), { refreshMetadata: true });
       } catch (err) {
         throw err;
       }
@@ -364,8 +372,8 @@ export function useAccounts() {
   const completeOAuthLogin = useCallback(async () => {
     try {
       const account = await invokeBackend<AccountInfo>("complete_login");
-      const accountList = await loadAccounts();
-      await refreshUsage(accountList);
+      const accountList = await loadAccounts(true);
+      await refreshUsage(accountList.filter(item => item.id === account.id), { refreshMetadata: true });
       return account;
     } catch (err) {
       throw err;
@@ -398,29 +406,54 @@ export function useAccounts() {
   }, []);
 
   useEffect(() => {
-    loadAccounts().then((accountList) => {
-      void refreshUsage(accountList);
-      // Populate live expiry immediately. The native background process keeps
-      // its cache current while a desktop webview is hidden or suspended.
-      void refreshMetadata(accountList);
-    });
+    void loadAccounts();
+  }, [loadAccounts]);
 
-    // Auto-refresh usage every 60 seconds (same as official Codex CLI)
-    const usageInterval = setInterval(() => {
-      refreshUsage().catch(() => {});
-    }, 60000);
-
-    const metadataInterval = !isTauriRuntime()
-      ? setInterval(() => {
-          refreshMetadata().catch(() => {});
-        }, 6 * 60 * 60 * 1000)
-      : undefined;
-
-    return () => {
-      clearInterval(usageInterval);
-      if (metadataInterval !== undefined) clearInterval(metadataInterval);
+  const activeAccountId = accounts.find(account => account.is_active)?.id;
+  useEffect(() => {
+    if (!preferencesReady || !listReady) return;
+    let disposed = false;
+    let polling = false;
+    let timer: number | undefined;
+    const foreground = () => document.visibilityState === "visible";
+    const poll = async () => {
+      if (disposed || polling) return;
+      polling = true;
+      // Desktop repeats are owned by the native poller. React only requests the
+      // initial/switch/settings refresh, then consumes native results.
+      const selected = selectRefreshAccounts(accountsRef.current, preferences.refresh_scope);
+      const missing = initialUsageFetch.current ? [] : accountsRef.current.filter(account => !account.usage?.recorded_at);
+      initialUsageFetch.current = true;
+      const targets = [...new Map([...selected, ...missing].map(account => [account.id, account])).values()];
+      await refreshUsage(targets).catch(() => {});
+      polling = false;
+      if (!disposed && !isTauriRuntime()) timer = window.setTimeout(poll, refreshDelay(preferences.refresh_interval_seconds, foreground()));
     };
-  }, [loadAccounts, refreshMetadata, refreshUsage]);
+    const visibilityChanged = () => {
+      window.clearTimeout(timer);
+      if (polling) return;
+      // A pending request reschedules itself; requestUsage also deduplicates calls.
+      if (foreground()) void poll();
+      else timer = window.setTimeout(poll, refreshDelay(preferences.refresh_interval_seconds, false));
+    };
+    // Let React commit accountsRef before selecting the new active account.
+    timer = window.setTimeout(poll, 0);
+    if (!isTauriRuntime()) document.addEventListener("visibilitychange", visibilityChanged);
+    return () => { disposed = true; window.clearTimeout(timer); document.removeEventListener("visibilitychange", visibilityChanged); };
+  }, [activeAccountId, preferencesReady, listReady, preferences.refresh_scope, preferences.refresh_interval_seconds, refreshUsage]);
+
+  useEffect(() => {
+    if (!preferencesReady || !listReady) return;
+    const refresh = () => {
+      const selected = selectRefreshAccounts(accountsRef.current, preferences.refresh_scope);
+      const missing = initialMetadataFetch.current ? [] : accountsRef.current.filter(account => !account.metadata_recorded_at);
+      initialMetadataFetch.current = true;
+      void refreshMetadata([...new Map([...selected, ...missing].map(account => [account.id, account])).values()]);
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 6 * 60 * 60 * 1000);
+    return () => window.clearInterval(timer);
+  }, [activeAccountId, preferencesReady, listReady, preferences.refresh_scope, refreshMetadata]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -435,6 +468,22 @@ export function useAccounts() {
 
     return () => unlisten?.();
   }, [loadAccounts]);
+
+  useEffect(() => {
+    if (!isTauriRuntime()) return;
+    let disposed = false;
+    let stop: (() => void) | undefined;
+    void import("@tauri-apps/api/event").then(async ({ listen }) => {
+      const unlisten = await listen<UsageInfo[]>("background-usage-updated", ({ payload }) => {
+        setAccounts(previous => previous.map(account => {
+          const usage = payload.find(usage => usage.account_id === account.id);
+          return usage ? { ...account, usage: mergeUsageResult(account.usage, usage) } : account;
+        }));
+      });
+      if (disposed) unlisten(); else stop = unlisten;
+    }).catch(error => console.error("Failed to listen for background usage", error));
+    return () => { disposed = true; stop?.(); };
+  }, []);
 
   return {
     accounts,

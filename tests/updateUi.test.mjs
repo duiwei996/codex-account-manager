@@ -8,7 +8,7 @@ import react from "@vitejs/plugin-react";
 const server = await createServer({
   configFile: false,
   plugins: [react()],
-  server: { middlewareMode: true },
+  server: { middlewareMode: true, hmr: false },
   optimizeDeps: { noDiscovery: true, include: [] },
   appType: "custom",
 });
@@ -23,7 +23,15 @@ function updater(status, overrides = {}) {
     ...overrides,
   };
 }
-const renderSettings = value => renderToStaticMarkup(createElement(UpdateSettings, { updater: value }));
+const renderSettings = (value, automaticChecks = true) => renderToStaticMarkup(createElement(UpdateSettings, { updater: value, automaticChecks }));
+
+test("disabling automatic checks preserves manual update checking", () => {
+  const html = renderSettings(updater({ kind: "idle" }), false);
+  assert.match(html, /已关闭自动检查/);
+  assert.match(html, /检查更新/);
+  assert.doesNotMatch(html, /\sdisabled(?:=|\s|>)/);
+  assert.doesNotMatch(html, /启动时自动检查更新/);
+});
 
 test("settings show the current version and a usable manual check button", () => {
   const html = renderSettings(updater({ kind: "idle" }));

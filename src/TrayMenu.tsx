@@ -1,5 +1,9 @@
+import { readAccountCache, readStatsCache, writeStatsCache } from "./lib/accountCache";
 import { ActionIcon } from "./components/ActionIcon";
 import { localizeError } from "./lib/errors";
+import { selectRefreshAccounts } from "./lib/refreshPolicy";
+import { mergeUsageResult } from "./lib/usageDisplay";
+import type { RuntimePreferences } from "./hooks/useRuntimePreferences";
 import { getLocale, tr, useLocale } from "./lib/i18n";
 import { useCallback, useEffect, useState } from "react";
 import type { AccountInfo, AccountUsageStats, DockDisplayMode, UsageInfo } from "./types";
@@ -137,12 +141,12 @@ function TrayMenu() {
       console.error("Failed to sync native menu language:", error);
     });
   }, [locale]);
-  const [accounts, setAccounts] = useState<AccountInfo[]>([]);
+  const [accounts, setAccounts] = useState<AccountInfo[]>(readAccountCache);
   const [loading, setLoading] = useState(true);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [usageById, setUsageById] = useState<Record<string, UsageInfo>>({});
-  const [statsById, setStatsById] = useState<Record<string, AccountUsageStats>>({});
+  const [usageById, setUsageById] = useState<Record<string, UsageInfo>>(() => Object.fromEntries(readAccountCache().filter(a => a.usage).map(a => [a.id, a.usage!])));
+  const [statsById, setStatsById] = useState<Record<string, AccountUsageStats>>(() => Object.fromEntries(readAccountCache().map(a => [a.id, readStatsCache(a.id)]).filter((entry): entry is [string, AccountUsageStats] => !!entry[1])));
   const [refreshing, setRefreshing] = useState(false);
   const [autoWarmupAllEnabled, setAutoWarmupAllEnabled] = useState(readAutoWarmupAllEnabled);
   const [dockDisplayMode, setDockDisplayMode] = useState<DockDisplayMode | null>(null);
@@ -155,11 +159,11 @@ function TrayMenu() {
           const usage = await invokeBackend<UsageInfo>("get_usage", {
             accountId: account.id,
           });
-          setUsageById((prev) => ({ ...prev, [account.id]: usage }));
+          setUsageById((prev) => ({ ...prev, [account.id]: mergeUsageResult(prev[account.id], usage) }));
         } catch (err) {
           setUsageById((prev) => ({
             ...prev,
-            [account.id]: {
+            [account.id]: mergeUsageResult(prev[account.id], {
               account_id: account.id,
               plan_type: account.plan_type,
               primary_used_percent: null,
@@ -172,7 +176,7 @@ function TrayMenu() {
               unlimited_credits: null,
               credits_balance: null,
               error: formatError(err),
-            },
+            }),
           }));
         }
       })
@@ -187,11 +191,13 @@ function TrayMenu() {
       const stats = await invokeBackend<AccountUsageStats>("get_account_usage_stats", {
         accountId: active.id,
       });
+      if (stats.account_id !== active.id || !stats.available || stats.error) return;
+      writeStatsCache(stats);
       setStatsById((prev) => ({ ...prev, [active.id]: stats }));
     } catch (err) {
       setStatsById((prev) => ({
         ...prev,
-        [active.id]: {
+        [active.id]: prev[active.id] ?? {
           account_id: active.id,
           available: false,
           source: t("Codex usage stats via ChatGPT backend"),
@@ -230,15 +236,18 @@ function TrayMenu() {
     }
   }, []);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (refresh = true) => {
     try {
       void loadDockDisplayMode();
       const list = await invokeBackend<AccountInfo[]>("list_accounts");
       setAccounts(list);
       setUsageById((prev) => retainUsageForAccounts(prev, list));
       setError(null);
-      void loadUsage(list); // Don't block the list render on the usage calls.
-      void loadActiveStats(list);
+      if (refresh) {
+        const preferences = await invokeBackend<RuntimePreferences>("get_runtime_preferences");
+        void loadUsage(selectRefreshAccounts(list, preferences.refresh_scope));
+        void loadActiveStats(list);
+      }
     } catch (err) {
       setError(formatError(err));
     } finally {
@@ -298,21 +307,25 @@ function TrayMenu() {
   useEffect(() => {
     if (!isTauriRuntime()) return;
     // The popup can open before event listeners finish registering.
-    void load();
+    void load(false);
     let disposed = false;
     let unlistenRefresh: (() => void) | undefined;
     let unlistenChanged: (() => void) | undefined;
     let unlistenTheme: (() => void) | undefined;
     let unlistenAutoWarmup: (() => void) | undefined;
+    let unlistenUsage: (() => void) | undefined;
 
     void (async () => {
       const { listen } = await import("@tauri-apps/api/event");
+      unlistenUsage = await listen<UsageInfo[]>("background-usage-updated", ({ payload }) => {
+        setUsageById(previous => ({ ...previous, ...Object.fromEntries(payload.map(usage => [usage.account_id, mergeUsageResult(previous[usage.account_id], usage)])) }));
+      });
       unlistenRefresh = await listen(TRAY_REFRESH_EVENT, () => {
         syncThemeFromStorage();
         setAutoWarmupAllEnabled(readAutoWarmupAllEnabled());
         void load();
       });
-      unlistenChanged = await listen(ACCOUNTS_CHANGED_EVENT, () => void load());
+      unlistenChanged = await listen(ACCOUNTS_CHANGED_EVENT, () => void load(false));
       unlistenTheme = await listen<ThemeMode>(THEME_CHANGED_EVENT, ({ payload }) => {
         if (payload === "light" || payload === "dark") {
           applyTheme(payload);
@@ -334,6 +347,7 @@ function TrayMenu() {
         unlistenChanged?.();
         unlistenTheme?.();
         unlistenAutoWarmup?.();
+        unlistenUsage?.();
       }
     });
 
@@ -343,6 +357,7 @@ function TrayMenu() {
       unlistenChanged?.();
       unlistenTheme?.();
       unlistenAutoWarmup?.();
+      unlistenUsage?.();
     };
   }, [load]);
 

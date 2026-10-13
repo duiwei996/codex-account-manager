@@ -3,7 +3,7 @@ import { UpdateError } from "./UpdateError";
 import { tr, useLocale } from "../lib/i18n";
 import { isTauriRuntime } from "../lib/platform";
 
-export function UpdateSettings({ updater }: { updater: AppUpdater }) {
+export function UpdateSettings({ updater, automaticChecks }: { updater: AppUpdater; automaticChecks: boolean }) {
   const locale = useLocale();
   const t = (key: string) => tr(key, locale);
   const { status } = updater;
@@ -50,7 +50,7 @@ export function UpdateSettings({ updater }: { updater: AppUpdater }) {
             </>}
             {status.kind === "error" && <UpdateError phase={status.phase} message={status.message} />}
           </div>
-          <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{t("Checks automatically at startup and every 6 hours.")}</p>
+          <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">{t(automaticChecks ? "Checks automatically at startup and every 6 hours." : "Automatic checks are off. You can still check manually.")}</p>
         </>
       )}
     </section>

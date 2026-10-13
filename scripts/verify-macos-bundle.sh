@@ -19,6 +19,19 @@ app_name="Codex Account Manager.app"
 verify_app() {
   local app="$1"
   [[ -d "$app" ]] || { echo "Error: missing application: $app" >&2; return 1; }
+  local plist="$app/Contents/Info.plist"
+  local localizations
+  localizations="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleLocalizations' "$plist")"
+  if [[ "$localizations" != *"zh-Hans"* || "$localizations" != *"en"* ]]; then
+    echo "Error: application bundle is missing Chinese or English native localizations." >&2
+    return 1
+  fi
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDevelopmentRegion' "$plist")" == "zh-Hans" ]] || {
+    echo "Error: application bundle has the wrong development language." >&2; return 1;
+  }
+  [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleAllowMixedLocalizations' "$plist")" == "true" ]] || {
+    echo "Error: native framework localization is not enabled." >&2; return 1;
+  }
   /usr/bin/codesign --verify --deep --strict --verbose=2 "$app"
   local details
   details="$(/usr/bin/codesign --display --verbose=4 "$app" 2>&1)"

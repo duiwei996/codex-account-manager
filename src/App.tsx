@@ -10,6 +10,7 @@ import { useAccounts } from "./hooks/useAccounts";
 import { SettingsModal } from "./components/SettingsModal";
 import { UpdateChecker } from "./components/UpdateChecker";
 import { useAppUpdater } from "./hooks/useAppUpdater";
+import { useRuntimePreferences } from "./hooks/useRuntimePreferences";
 import { finishForceClose } from "./lib/desktopReopen";
 import { useForceCloseCodexProcesses } from "./hooks/useForceCloseCodexProcesses";
 import { AccountCard, AddAccountModal, WindowResizeBorders } from "./components";
@@ -135,7 +136,8 @@ function readStoredTimedWarmupLedger(): Record<string, string> {
 
 function App() {
   const locale = useLocale();
-  const updater = useAppUpdater();
+  const runtimePreferences = useRuntimePreferences();
+  const updater = useAppUpdater(runtimePreferences.ready && runtimePreferences.preferences.automatic_update_checks);
   const [webReadOnly, setWebReadOnly] = useState(!isTauriRuntime());
   useEffect(() => {
     document.documentElement.lang = locale;
@@ -166,7 +168,7 @@ function App() {
     cancelOAuthLogin,
     loadMaskedAccountIds,
     saveMaskedAccountIds,
-  } = useAccounts();
+  } = useAccounts(runtimePreferences.preferences, runtimePreferences.ready);
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
@@ -542,18 +544,16 @@ function App() {
   const markSuccessfulWarmup = useCallback(
     (accountId: string, timestamp = Date.now(), window?: AutoWarmupWindow) => {
       delete autoWarmupRetryAfterRef.current[accountId];
-      setAutoWarmupLedger((prev) => ({
-        ...prev,
+      const next = {
+        ...autoWarmupLedgerRef.current,
         [accountId]: {
+          ...autoWarmupLedgerRef.current[accountId],
           lastSuccessfulWarmupAt: timestamp,
-          ...(window
-            ? {
-                lastAutoWindowKey: getAutoWarmupWindowKey(window),
-                lastAutoWindowKind: window.kind,
-              }
-            : {}),
+          ...(window ? { lastAutoWindowKey: getAutoWarmupWindowKey(window), lastAutoWindowKind: window.kind } : {}),
         },
-      }));
+      };
+      autoWarmupLedgerRef.current = next;
+      setAutoWarmupLedger(next);
     },
     []
   );
@@ -741,18 +741,6 @@ function App() {
       : t("Auto: off");
   }, [autoWarmupAccountIds.size, autoWarmupAllEnabled, autoWarmupRunningIds, locale]);
 
-  const timedWarmupTargetsReady = useMemo(
-    () =>
-      accounts.length > 0 &&
-      accounts.every((account) => account.usage && !account.usageLoading),
-    [accounts]
-  );
-
-  const timedWarmupTargetCount = useMemo(
-    () => getTimedWarmupTargets(accounts).length,
-    [accounts]
-  );
-
   const backOffAutoWarmupRetry = useCallback((accountId: string) => {
     autoWarmupRetryAfterRef.current[accountId] =
       Date.now() + AUTO_WARMUP_RETRY_BACKOFF_MS;
@@ -760,6 +748,8 @@ function App() {
 
   const runAutoWarmupForAccount = useCallback(
     async (accountId: string, accountName: string) => {
+      if (autoWarmupRunningIdsRef.current.has(accountId)) return;
+      autoWarmupRunningIdsRef.current.add(accountId);
       setAutoWarmupRunningIds((prev) => new Set(prev).add(accountId));
 
       try {
@@ -787,6 +777,7 @@ function App() {
           true
         );
       } finally {
+        autoWarmupRunningIdsRef.current.delete(accountId);
         setAutoWarmupRunningIds((prev) => {
           const next = new Set(prev);
           next.delete(accountId);
@@ -817,7 +808,7 @@ function App() {
         const retryAfter = autoWarmupRetryAfterRef.current[account.id];
         if (retryAfter && Date.now() < retryAfter) continue;
 
-        if (!getDueAutoWarmupForAccount(account.id, account.usage)) continue;
+        if (!account.usage?.from_cache && !getDueAutoWarmupForAccount(account.id, account.usage)) continue;
 
         void runAutoWarmupForAccount(account.id, account.name);
       }
@@ -838,18 +829,24 @@ function App() {
   ]);
 
   const runTimedWarmup = useCallback(async () => {
-    const targets = getTimedWarmupTargets(accountsRef.current);
+    if (timedWarmupRunningRef.current) return;
+    const targets = accountsRef.current.filter(account => account.auth_mode === "chat_g_p_t");
     if (targets.length === 0) return;
-
+    timedWarmupRunningRef.current = true;
     setTimedWarmupRunning(true);
     try {
-      const warmedAt = Date.now();
       let warmed = 0;
       let failed = 0;
       for (const account of targets) {
+        const lastSuccess = autoWarmupLedgerRef.current[account.id]?.lastSuccessfulWarmupAt;
+        if (autoWarmupRunningIdsRef.current.has(account.id) || (lastSuccess && Date.now() - lastSuccess < 60_000)) continue;
         try {
+          const freshUsage = await refreshSingleUsage(account.id);
+          if (!getTimedWarmupTargets([{ ...account, usage: freshUsage, usageLoading: false }]).length) continue;
+          const refreshedSuccess = autoWarmupLedgerRef.current[account.id]?.lastSuccessfulWarmupAt;
+          if (autoWarmupRunningIdsRef.current.has(account.id) || (refreshedSuccess && Date.now() - refreshedSuccess < 60_000)) continue;
           await warmupAccount(account.id);
-          markSuccessfulWarmup(account.id, warmedAt);
+          markSuccessfulWarmup(account.id, Date.now());
           warmed += 1;
         } catch (err) {
           console.error("Timed warm-up failed:", err);
@@ -857,6 +854,7 @@ function App() {
         }
       }
 
+      if (warmed === 0 && failed === 0) return;
       if (failed === 0) {
         showWarmupToast(
           msg(`Timed warm-up sent for ${warmed} account${warmed === 1 ? "" : "s"}`, `已为 ${warmed} 个账号发送定时预热请求`)
@@ -865,9 +863,10 @@ function App() {
         showWarmupToast(msg(`Timed warm-up: ${warmed} ok, ${failed} failed`, `定时预热：成功 ${warmed} 个，失败 ${failed} 个`), true);
       }
     } finally {
+      timedWarmupRunningRef.current = false;
       setTimedWarmupRunning(false);
     }
-  }, [markSuccessfulWarmup, showWarmupToast, warmupAccount]);
+  }, [markSuccessfulWarmup, refreshSingleUsage, showWarmupToast, warmupAccount]);
 
   useEffect(() => {
     if (!isTauriRuntime() || !timedWarmupEnabled || timedWarmupTimes.length === 0) return;
@@ -885,7 +884,7 @@ function App() {
       // asleep) is skipped rather than warmed late at the wrong moment.
       if (!timedWarmupTimes.includes(currentTime)) return;
       if (timedWarmupLastFireRef.current[currentTime] === todayKey) return;
-      if (!timedWarmupTargetsReady || timedWarmupTargetCount === 0) return;
+      if (!accountsRef.current.some(account => account.auth_mode === "chat_g_p_t")) return;
 
       // Mark before running so a slow warm-up can't double-fire on the next tick.
       timedWarmupLastFireRef.current[currentTime] = todayKey;
@@ -910,8 +909,7 @@ function App() {
   }, [
     timedWarmupEnabled,
     timedWarmupTimes,
-    timedWarmupTargetsReady,
-    timedWarmupTargetCount,
+    accounts.length,
     runTimedWarmup,
   ]);
 
@@ -1163,10 +1161,12 @@ function App() {
             </div>
 
             <div className="flex shrink-0 items-center gap-1.5">
+              <button disabled={webReadOnly} onClick={() => setIsAddModalOpen(true)} title={t("Add account")} aria-label={t("Add account")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"><ActionIcon name="add" /></button>
               <button
                 onClick={toggleMaskAll}
                 className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-100 text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700 shrink-0"
                 title={allMasked ? t("Show all account names and emails") : t("Hide all account names and emails")}
+                aria-label={allMasked ? t("Show all account names and emails") : t("Hide all account names and emails")}
               >
                 {allMasked ? (
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1192,6 +1192,7 @@ function App() {
               >
                 <ActionIcon name="refresh" spinning={isRefreshing} />
               </button>
+              <button disabled={!isTauriRuntime()} onClick={() => openTransfer("import")} title={t("Import / Export")} aria-label={t("Import / Export")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"><ActionIcon name="transfer" /></button>
               <button
                 onClick={() => setIsSettingsOpen(true)}
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-gray-100 text-gray-700 transition-colors hover:bg-gray-200 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700"
@@ -1199,9 +1200,6 @@ function App() {
               >
                 <ActionIcon name="settings" />
               </button>
-              <button disabled={!isTauriRuntime()} onClick={() => openTransfer("import")} title={t("Import JSON")} aria-label={t("Import JSON")} className="flex h-9 w-9 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"><ActionIcon name="import" /></button>
-              <button disabled={!isTauriRuntime() || accounts.length === 0} onClick={() => openTransfer("export")} title={t("Export all")} aria-label={t("Export all")} className="flex h-9 w-9 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"><ActionIcon name="export" /></button>
-              <button disabled={webReadOnly} onClick={() => setIsAddModalOpen(true)} title={t("Add account")} aria-label={t("Add account")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white shadow-sm hover:bg-blue-700 disabled:opacity-50"><ActionIcon name="add" /></button>
             </div>
           </div>
         </div>
@@ -1488,6 +1486,7 @@ function App() {
 
       {isSettingsOpen && (
         <SettingsModal
+          runtimePreferences={runtimePreferences}
           updater={updater}
           theme={themeMode}
           onThemeChange={setThemeMode}
@@ -1583,7 +1582,7 @@ function App() {
       />
 
       {/* Import/Export Config Modal */}
-      <AccountTransferModal open={isConfigModalOpen} mode={transferMode} accountId={exportAccountId} onClose={() => setIsConfigModalOpen(false)} onImported={async () => {const list = await loadAccounts(true);await refreshUsage(list);}} />
+      <AccountTransferModal open={isConfigModalOpen} mode={transferMode} accountId={exportAccountId} onClose={() => setIsConfigModalOpen(false)} onImported={async (summary) => {const list = await loadAccounts(true);await refreshUsage(list.filter(account => summary.affected_account_ids.includes(account.id)), { refreshMetadata: true });}} />
       <UpdateChecker updater={updater} settingsOpen={isSettingsOpen} />
 
     </div>

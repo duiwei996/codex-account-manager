@@ -18,6 +18,7 @@ export function getTimedWarmupTargets(accounts: AccountWithUsage[]): AccountWith
       account.usage &&
       !account.usageLoading &&
       !account.usage.error &&
+      !account.usage.from_cache &&
       !isLimitFull(account.usage.secondary_used_percent)
   );
 }

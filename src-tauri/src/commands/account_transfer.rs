@@ -258,21 +258,28 @@ fn parse_import_payload(payload: &str) -> Result<Vec<StoredAccount>, String> {
 #[tauri::command]
 pub async fn import_accounts_json(payload: String) -> Result<ImportAccountsSummary, String> {
     let accounts = parse_import_payload(&payload)?;
-    update_accounts(|store| {
+    let summary = update_accounts(|store| {
         let total = accounts.len();
         let mut imported = 0;
+        let mut affected_account_ids = Vec::new();
         for account in accounts {
-            crate::auth::storage::upsert_account(store, account)?;
+            let saved = crate::auth::storage::upsert_account(store, account)?;
+            if !affected_account_ids.contains(&saved.id) {
+                affected_account_ids.push(saved.id);
+            }
             imported += 1;
         }
         crate::auth::validation::validate_store(store)?;
         Ok(ImportAccountsSummary {
+            affected_account_ids,
             total_in_payload: total,
             imported_count: imported,
             skipped_count: total - imported,
         })
     })
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string())?;
+    super::usage::invalidate_account_metadata(&summary.affected_account_ids);
+    Ok(summary)
 }
 
 #[tauri::command]

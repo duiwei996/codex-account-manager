@@ -119,7 +119,7 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
 
   return (
     <div className="space-y-3">
-      {usage.error && <p role="status" className="rounded-lg bg-amber-50 p-2 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">{localizeError(usage.error, locale)} · {t("Cached usage")}{usage.recorded_at && ` · ${t("Recorded at")}: ${new Date(usage.recorded_at).toLocaleString(locale)}`}</p>}
+      {(usage.error || usage.from_cache) && <p role="status" className="rounded-lg bg-amber-50 p-2 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">{usage.error && `${localizeError(usage.error, locale)} · `}{t("Cached usage")}{usage.recorded_at && ` · ${t("Recorded at")}: ${new Date(usage.recorded_at).toLocaleString(locale)}`}</p>}
       {hasPrimary && (
         <RateLimitBar
           label={t("5h Limit")}

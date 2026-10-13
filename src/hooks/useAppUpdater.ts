@@ -5,7 +5,7 @@ import { isTauriRuntime } from "../lib/platform";
 
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
-export function useAppUpdater() {
+export function useAppUpdater(automaticChecks = true) {
   const [controller] = useState(() => createAppUpdater({
     enabled: import.meta.env.VITE_UPDATER_ENABLED === "true" && isTauriRuntime(),
     check: async () => {
@@ -20,11 +20,11 @@ export function useAppUpdater() {
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot);
 
   useEffect(() => {
-    if (!controller.enabled) return;
+    if (!controller.enabled || !automaticChecks) return;
     void controller.checkForUpdate();
     const timer = window.setInterval(() => void controller.checkForUpdate(), UPDATE_CHECK_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, [controller]);
+  }, [controller, automaticChecks]);
 
   return { ...controller, ...snapshot, version };
 }

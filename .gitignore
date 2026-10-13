@@ -38,6 +38,7 @@ rust-audit.json
 
 # Local reports and handoff notes
 /.runtime/
+/.tmp/
 /reports/
 *.tmp
 *.bak
