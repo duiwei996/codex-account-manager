@@ -298,9 +298,9 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
   }, []);
 
   const switchAccount = useCallback(
-    async (accountId: string, allowRunning = false) => {
+    async (accountId: string, allowRunning = false, restart = false) => {
       try {
-        await invokeBackend("switch_account", { accountId, allowRunning });
+        await invokeBackend(restart ? "restart_account" : "switch_account", { accountId, allowRunning });
         await loadAccounts(true); // Preserve usage data
       } catch (err) {
         throw err;

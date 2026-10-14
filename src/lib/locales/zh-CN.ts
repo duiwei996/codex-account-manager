@@ -315,4 +315,7 @@ export default {
   "New scheduled time": "新增预热时间",
   "Choose valid, different times. Changes have not been saved.": "请选择有效且不重复的时间，当前修改尚未保存。",
   "Runs daily at local time while the app is running. Missed times are skipped.": "应用运行期间每天按本地时间执行；错过的时间不会补执行。",
+  "Restart Codex": "重启",
+  "Restarting Codex...": "正在重启…",
+  "Reapply this account and restart Codex": "重新应用此账号的登录信息并重启 Codex",
 } as Record<string, string>;

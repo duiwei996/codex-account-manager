@@ -12,7 +12,7 @@ test("local installer receives official updates without a release environment or
   assert.equal(prepared.env.VITE_UPDATER_ENABLED, "true");
   assert.equal(prepared.config.plugins.updater.pubkey, key);
   assert.deepEqual(prepared.config.plugins.updater.endpoints, [UPDATE_ENDPOINT]);
-  assert.deepEqual(prepared.config.plugins.updater.windows.installerArgs, ["/NS"]);
+  assert.equal(prepared.config.plugins.updater.windows?.installerArgs, undefined);
   assert.equal(prepared.config.bundle.createUpdaterArtifacts, false);
   assert.deepEqual(prepared.args.slice(0, 3), ["build", "--target", "x86_64-pc-windows-msvc"]);
   assert.deepEqual(JSON.parse(prepared.args.at(-1)), prepared.config);

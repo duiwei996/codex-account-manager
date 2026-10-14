@@ -101,6 +101,7 @@ pub fn run() {
             get_active_account_info,
             add_account_from_file,
             switch_account,
+            commands::restart_account,
             delete_account,
             rename_account,
             // Masked accounts

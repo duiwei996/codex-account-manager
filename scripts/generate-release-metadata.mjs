@@ -11,9 +11,11 @@ export function generateReleaseMetadata(release, version, readSignature) {
   const prefix = `^Codex[ .]Account[ .]Manager_${escapedVersion}_`;
   const patterns = {
     "linux-x86_64": [new RegExp(prefix + "amd64\\.AppImage$")],
-    // Updates use the NSIS installer's in-place upgrade and shortcut preservation.
-    // Never fall back to MSI: the updater arguments and installed layout differ.
+    // Current runtimes select their bundle-specific entry before the legacy fallback.
+    // Keep the generic EXE entry for older clients without bundle detection.
     "windows-x86_64": [new RegExp(prefix + "x64-setup\\.exe$")],
+    "windows-x86_64-nsis": [new RegExp(prefix + "x64-setup\\.exe$")],
+    "windows-x86_64-msi": [new RegExp(prefix + "x64_[A-Za-z-]+\\.msi$")],
     "darwin-aarch64": [new RegExp(prefix + "aarch64\\.app\\.tar\\.gz$")],
     "darwin-x86_64": [new RegExp(prefix + "x64\\.app\\.tar\\.gz$")],
   };

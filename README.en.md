@@ -51,6 +51,8 @@ After installing the dependencies and platform-specific Tauri build prerequisite
 
 Receiving official updates requires no private key and does not generate signed update artifacts. Updates distributed to other installations still use the signed release workflow. `pnpm build` builds only the frontend; direct Tauri build commands do not automatically enable updates.
 
+On Windows, `build:local` adds a project-owned launcher around the stock installer. It checks installed versions and preserves the registered directory during upgrades. Shortcut handling uses official installer hooks; dependency source and third-party templates remain unmodified. Releases sign the final EXE, and Windows updates have separate EXE and MSI entries. All platform package formats remain available.
+
 ## Version management
 
 Root `VERSION` is the single version source. Local builds never increment it; cloud builds use the same version. Reserved versions are skipped, and versions older than existing releases are rejected.

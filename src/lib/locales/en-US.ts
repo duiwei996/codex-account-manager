@@ -315,4 +315,7 @@ export default {
   "New scheduled time": "New scheduled time",
   "Choose valid, different times. Changes have not been saved.": "Choose valid, different times. Changes have not been saved.",
   "Runs daily at local time while the app is running. Missed times are skipped.": "Runs daily at local time while the app is running. Missed times are skipped.",
+  "Restart Codex": "Restart",
+  "Restarting Codex...": "Restarting…",
+  "Reapply this account and restart Codex": "Reapply this account and restart Codex",
 } as Record<string, string>;

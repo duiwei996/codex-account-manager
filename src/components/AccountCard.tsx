@@ -13,6 +13,7 @@ const RESET_CREDITS_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 interface AccountCardProps {
   account: AccountWithUsage;
   onSwitch: () => void;
+  onRestart?: () => void;
   onWarmup: () => Promise<void>;
   onDelete: () => void;
   onExport: () => void;
@@ -103,6 +104,7 @@ function BlurredText({ children, blur }: { children: React.ReactNode; blur: bool
 export function AccountCard({
   account,
   onSwitch,
+  onRestart,
   onWarmup,
   onDelete,
   onExport,
@@ -358,10 +360,12 @@ export function AccountCard({
       <div className="flex flex-wrap gap-2 mt-3">
         {account.is_active ? (
           <button
-            disabled
-            className="flex-1 px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 border border-gray-200 dark:border-gray-700 cursor-default"
+            onClick={onRestart}
+            disabled={readOnly || !desktopActions || !onRestart || switching || switchDisabled}
+            title={t("Reapply this account and restart Codex")}
+            className="flex-1 px-4 py-2 text-sm font-medium rounded-lg bg-blue-100 hover:bg-blue-200 dark:bg-blue-900/30 dark:hover:bg-blue-900/50 text-blue-800 dark:text-blue-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {t("✓ Active")}
+            {switching ? t("Restarting Codex...") : t("Restart Codex")}
           </button>
         ) : (
           <button

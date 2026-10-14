@@ -479,15 +479,17 @@ function App() {
     };
   }, []);
 
-  const handleSwitch = async (accountId: string) => {
+  const handleSwitch = async (accountId: string, restart = false) => {
     if (forceCloseInFlightRef.current) return;
     forceCloseInFlightRef.current = true;
     setSwitchingId(accountId);
     try {
-      await switchAccount(accountId);
+      await switchAccount(accountId, false, restart);
     } catch (err) {
       await loadAccounts(true);
-      showWarmupToast(msg(`Switch failed: ${formatWarmupError(err)}`, `切换账号失败：${formatWarmupError(err)}`), true);
+      showWarmupToast(restart
+        ? msg(`Restart failed: ${formatWarmupError(err)}`, `重启 Codex 失败：${formatWarmupError(err)}`)
+        : msg(`Switch failed: ${formatWarmupError(err)}`, `切换账号失败：${formatWarmupError(err)}`), true);
     } finally {
       setSwitchingId(null);
       forceCloseInFlightRef.current = false;
@@ -1377,6 +1379,7 @@ function App() {
                 readOnly={webReadOnly}
                 desktopActions={isTauriRuntime()}
                     onSwitch={() => { }}
+                    onRestart={() => void handleSwitch(activeAccount.id, true)}
                     onWarmup={() =>
                       handleWarmupAccount(activeAccount.id, activeAccount.name)
                     }

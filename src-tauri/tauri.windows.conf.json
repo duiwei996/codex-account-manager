@@ -6,7 +6,6 @@
       "allowDowngrades": false,
       "nsis": {
         "installerHooks": "windows/installer-hooks.nsh",
-        "template": "windows/installer.nsi",
         "languages": ["SimpChinese", "English"],
         "displayLanguageSelector": false
       }

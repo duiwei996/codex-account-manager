@@ -76,34 +76,41 @@ pub async fn add_account_from_auth_json_text(
 /// Switch to a different account
 #[tauri::command]
 pub async fn switch_account(account_id: String, allow_running: Option<bool>) -> Result<(), String> {
-    switch_account_with_policy(&account_id, allow_running).await
+    switch_account_with_policy(&account_id, allow_running, false).await
+}
+
+/// Reapply saved credentials even if metadata still marks this account as active.
+#[tauri::command]
+pub async fn restart_account(account_id: String) -> Result<(), String> {
+    switch_account_with_policy(&account_id, None, true).await
 }
 
 pub async fn switch_account_by_id(account_id: &str) -> Result<(), String> {
-    switch_account_with_policy(account_id, None).await
+    switch_account_with_policy(account_id, None, false).await
 }
 
 async fn switch_account_with_policy(
     account_id: &str,
     allow_running: Option<bool>,
+    restart: bool,
 ) -> Result<(), String> {
     let _auth_guard = AUTH_OPERATION_LOCK.lock().await;
     let mode = crate::auth::load_app_settings()
         .map_err(|e| e.to_string())?
         .account_switch_mode;
-    let direct = allow_running == Some(true) || mode == AccountSwitchMode::Direct;
+    let direct = !restart && (allow_running == Some(true) || mode == AccountSwitchMode::Direct);
     let _file_guard = crate::auth::lock_auth_files()
         .await
         .map_err(|e| e.to_string())?;
     let store = load_accounts().map_err(|e| e.to_string())?;
 
-    let target_index = store
+    store
         .accounts
         .iter()
-        .position(|account| account.id == account_id)
+        .find(|account| account.id == account_id)
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
 
-    if store.active_account_id.as_deref() == Some(account_id) {
+    if !restart && store.active_account_id.as_deref() == Some(account_id) {
         return Ok(());
     }
 
@@ -118,7 +125,15 @@ async fn switch_account_with_policy(
         .map_err(|e| e.to_string())?;
     }
 
-    let account = ensure_chatgpt_tokens_fresh_locked(&store.accounts[target_index])
+    // Reapplying the active account must use tokens synchronized above, not the
+    // pre-sync snapshot (refresh tokens can be single-use).
+    let current_store = load_accounts().map_err(|e| e.to_string())?;
+    let target = current_store
+        .accounts
+        .iter()
+        .find(|a| a.id == account_id)
+        .ok_or_else(|| format!("Account not found: {account_id}"))?;
+    let mut account = ensure_chatgpt_tokens_fresh_locked(target)
         .await
         .map_err(|e| e.to_string())?;
 
@@ -141,6 +156,13 @@ async fn switch_account_with_policy(
             })
             .map_err(|e| e.to_string())?;
         }
+        // Closing Codex can flush newer credentials for the same account.
+        account = load_accounts()
+            .map_err(|e| e.to_string())?
+            .accounts
+            .into_iter()
+            .find(|a| a.id == account_id)
+            .ok_or_else(|| format!("Account not found: {account_id}"))?;
         result.reopen_token
     } else {
         None

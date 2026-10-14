@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { resolve } from "node:path";
 
-const expectedPlatforms = ["linux-x86_64", "windows-x86_64", "darwin-aarch64", "darwin-x86_64"];
+const expectedPlatforms = ["linux-x86_64", "windows-x86_64", "windows-x86_64-nsis", "windows-x86_64-msi", "darwin-aarch64", "darwin-x86_64"];
 export function normalizeReleaseMetadata(metadata, assets, version) {
   const normalized = structuredClone(metadata);
   const apiPrefix = "https://api.github.com/repos/duiwei996/codex-account-manager/releases/assets/";
@@ -25,10 +25,18 @@ export function verifyRelease(metadata, assets, version) {
     const entry = metadata.platforms?.[platform];
     if (!entry?.signature || typeof entry.signature !== "string" || !entry.url?.startsWith(prefix)) throw new Error(`Missing or invalid signed platform: ${platform}`);
     const filename = decodeURIComponent(new URL(entry.url).pathname.split("/").at(-1));
-    if (platform === "windows-x86_64" && !/^Codex[ .]Account[ .]Manager_\d+\.\d+\.\d+_x64-setup\.exe$/.test(filename)) {
-      throw new Error("Windows updates must use the signed NSIS setup.exe installer");
+    if (platform.startsWith("windows-")) {
+      const escapedVersion = version.replace(/\./g, "\\.");
+      const installer = platform.endsWith("-msi") ? "x64_[A-Za-z-]+\\.msi" : "x64-setup\\.exe";
+      if (!new RegExp(`^Codex[ .]Account[ .]Manager_${escapedVersion}_${installer}$`).test(filename)) {
+        throw new Error(`Windows update package does not match its version or installer type: ${platform}`);
+      }
     }
     if (!names.has(filename) || !names.has(filename + ".sig")) throw new Error(`Missing updater package/signature for ${platform}`);
+  }
+  if (metadata.platforms["windows-x86_64"].url !== metadata.platforms["windows-x86_64-nsis"].url ||
+      metadata.platforms["windows-x86_64"].signature !== metadata.platforms["windows-x86_64-nsis"].signature) {
+    throw new Error("Legacy Windows updates must match the NSIS update");
   }
   return true;
 }

@@ -4,10 +4,8 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 if (-not $OutputDirectory) { $OutputDirectory = Join-Path $projectRoot '.tmp\installer-upgrade-regression' }
 $testRoot = [IO.Path]::GetFullPath($OutputDirectory)
 if (-not $testRoot.StartsWith($projectRoot + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Tests must stay inside the project.' }
-$generatedRoot = Join-Path $projectRoot 'src-tauri\target\release\nsis\x64'
 $compiler = Join-Path $projectRoot 'src-tauri\target\.tauri\NSIS\makensis.exe'
-$source = Get-Content -LiteralPath (Join-Path $generatedRoot 'installer.nsi') -Raw
-if ($source -notmatch 'Call DetectExistingNsisInstallation') { throw 'Build the new Windows installer before running this test.' }
+if (-not $testRoot.StartsWith((Join-Path $projectRoot '.tmp') + '\', [StringComparison]::OrdinalIgnoreCase)) { throw 'Test artifacts must stay inside project .tmp.' }
 $version = (Get-Content -LiteralPath (Join-Path $projectRoot 'package.json') -Raw | ConvertFrom-Json).version
 $parts = $version.Split('.')
 $older = if ([int]$parts[2] -gt 0) { "$($parts[0]).$($parts[1]).$([int]$parts[2] - 1)" } else { '0.0.0' }
@@ -16,29 +14,19 @@ $testName = 'CodexInstallerRegression-' + [Guid]::NewGuid().ToString('N')
 $registryKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\' + $testName
 $manufacturerKey = 'HKCU:\Software\duiwei996\' + $testName
 New-Item -ItemType Directory -Path $testRoot -Force | Out-Null
-foreach ($name in @('utils.nsh', 'FileAssociation.nsh', 'English.nsh', 'SimpChinese.nsh')) {
-    Copy-Item -LiteralPath (Join-Path $generatedRoot $name) -Destination (Join-Path $testRoot $name)
-}
 $testDesktop = Join-Path $testRoot 'desktop'
 New-Item -ItemType Directory -Path $testDesktop -Force | Out-Null
 $testHooks = Join-Path $testRoot 'installer-hooks.nsh'
 $hooks = Get-Content -LiteralPath (Join-Path $projectRoot 'src-tauri\windows\installer-hooks.nsh') -Raw
 $hooks.Replace('$DESKTOP', $testDesktop) | Set-Content -LiteralPath $testHooks -Encoding utf8
 $testInstaller = Join-Path $testRoot 'test-setup.exe'
-$mainSource = [regex]::Match($source, '(?m)^!define MAINBINARYSRCPATH "([^"]+)"').Groups[1].Value
-$testPayload = Join-Path $testRoot 'fixture-manager.exe'
-Copy-Item -LiteralPath $mainSource -Destination $testPayload
-$source = [regex]::Replace($source, '(?m)^!define PRODUCTNAME ".*"', ('!define PRODUCTNAME "' + $testName + '"'))
-$source = [regex]::Replace($source, '(?m)^!define MAINBINARYNAME ".*"', '!define MAINBINARYNAME "fixture-manager"')
-$source = [regex]::Replace($source, '(?m)^!define MAINBINARYSRCPATH ".*"', ('!define MAINBINARYSRCPATH "' + $testPayload + '"'))
-$source = [regex]::Replace($source, '(?m)^!define BUNDLEID ".*"', '!define BUNDLEID "com.duiwei996.codex-installer-regression"')
-$source = [regex]::Replace($source, '(?m)^!define OUTFILE ".*"', ('!define OUTFILE "' + $testInstaller + '"'))
-$source = [regex]::Replace($source, '(?m)^!include ".*installer-hooks.nsh"', ('!include "' + $testHooks + '"'))
-$source = $source.Replace('$DESKTOP', $testDesktop)
-$testScript = Join-Path $testRoot 'test-installer.nsi'
-$source | Set-Content -LiteralPath $testScript -Encoding utf8
-& $compiler /V2 /INPUTCHARSET UTF8 $testScript
-if ($LASTEXITCODE -ne 0) { throw 'Isolated installer compilation failed.' }
+Push-Location $projectRoot
+try {
+    & node scripts/prepare-windows-install-test.mjs $testName $testRoot $testHooks
+    if ($LASTEXITCODE -ne 0) { throw 'Official fixture bundling failed.' }
+} finally { Pop-Location }
+& $compiler /V2 /INPUTCHARSET UTF8 "/DAPP_VERSION=$version" "/DPRODUCT_NAME=$testName" '/DMAIN_BINARY=fixture-manager' "/DPAYLOAD_FILE=$testRoot\official-test-setup.exe" "/DOUTPUT_FILE=$testInstaller" (Join-Path $projectRoot 'src-tauri\windows\setup-launcher.nsi')
+if ($LASTEXITCODE -ne 0) { throw 'Project launcher compilation failed.' }
 
 $legacyUninstaller = Join-Path $testRoot 'legacy-uninstall.exe'
 @'
@@ -69,12 +57,14 @@ $cases = @(
     @{ Name = 'updater-upgrade-without-uninstall'; Installed = $older; Exit = 0; Update = $true },
     @{ Name = 'same-version-reinstall-without-uninstall'; Installed = $version; Exit = 0 },
     @{ Name = 'unknown-version-update-without-uninstall'; Installed = ''; Exit = 0 },
-    @{ Name = 'reject-downgrade-without-uninstall'; Installed = $newer; Exit = 1 }
+    @{ Name = 'reject-downgrade-without-uninstall'; Installed = $newer; Exit = 1 },
+    @{ Name = 'reject-inconsistent-installation'; Installed = $older; Exit = 2; Invalid = $true }
 )
 try {
     foreach ($case in $cases) {
         Clear-TestRegistry
-        $installDirectory = Join-Path $testRoot ($case.Name + ' path with spaces')
+        $unicodeLabel = [string][char]0x4E2D + [char]0x6587
+        $installDirectory = Join-Path $testRoot ($case.Name + ' ' + $unicodeLabel + ' path with spaces')
         New-Item -ItemType Directory -Path $installDirectory -Force | Out-Null
         $sentinel = Join-Path $installDirectory 'settings-preserved.txt'
         [IO.File]::WriteAllText($sentinel, 'synthetic user settings')
@@ -83,21 +73,24 @@ try {
         $beforeHash = (Get-FileHash -LiteralPath $binary).Hash
         Copy-Item -LiteralPath $legacyUninstaller -Destination (Join-Path $installDirectory 'uninstall.exe')
         if ($null -ne $case.Installed) {
-            New-Item -Path $registryKey -Force | Out-Null
+            New-Item -Path $registryKey -Value $testName -Force | Out-Null
             New-ItemProperty -LiteralPath $registryKey -Name Publisher -Value 'duiwei996' -PropertyType String | Out-Null
             New-ItemProperty -LiteralPath $registryKey -Name DisplayVersion -Value $case.Installed -PropertyType String | Out-Null
             New-ItemProperty -LiteralPath $registryKey -Name MainBinaryName -Value 'fixture-manager.exe' -PropertyType String | Out-Null
-            New-ItemProperty -LiteralPath $registryKey -Name UninstallString -Value ('"' + $installDirectory + '\uninstall.exe"') -PropertyType String | Out-Null
+            $uninstallerValue = if ($case.Invalid) { 'unrelated.exe' } else { '"' + $installDirectory + '\uninstall.exe"' }
+            New-ItemProperty -LiteralPath $registryKey -Name UninstallString -Value $uninstallerValue -PropertyType String | Out-Null
             New-Item -Path $manufacturerKey -Value $installDirectory -Force | Out-Null
         }
         # Exercise the generated production installer against isolated paths and registry keys.
         # /NS prevents shortcuts, and omitting /R prevents launching the application.
         $installerArguments = @('/S', '/NS')
         if ($case.Update) { $installerArguments += '/UPDATE' }
-        $installerArguments += '/D=' + $installDirectory
+        $requestedDirectory = if ($null -ne $case.Installed) { Join-Path $testRoot 'must-not-install-here' } else { $installDirectory }
+        $installerArguments += '/D=' + $requestedDirectory
         $process = Start-Process -FilePath $testInstaller -ArgumentList $installerArguments -PassThru -WindowStyle Hidden
         if (-not $process.WaitForExit(30000)) { $process.Kill(); throw 'Isolated installer timed out.' }
         if ($process.ExitCode -ne $case.Exit) { throw "Wrong installer exit code: $($case.Name), $($process.ExitCode)" }
+        if (Test-Path (Join-Path $testRoot 'must-not-install-here')) { throw 'Upgrade changed the install directory.' }
         if ([IO.File]::ReadAllText($sentinel) -ne 'synthetic user settings') { throw 'Existing settings were changed.' }
         if (Test-Path -LiteralPath (Join-Path $installDirectory 'old-uninstaller-was-called.txt')) { throw 'The old uninstaller was invoked.' }
         $storedVersion = (Get-ItemProperty -LiteralPath $registryKey).DisplayVersion
