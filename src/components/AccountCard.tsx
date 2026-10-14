@@ -14,6 +14,7 @@ interface AccountCardProps {
   account: AccountWithUsage;
   onSwitch: () => void;
   onRestart?: () => void;
+  onRelogin?: () => void;
   onWarmup: () => Promise<void>;
   onDelete: () => void;
   onExport: () => void;
@@ -104,6 +105,7 @@ function BlurredText({ children, blur }: { children: React.ReactNode; blur: bool
 export function AccountCard({
   account,
   onSwitch,
+  onRelogin,
   onRestart,
   onWarmup,
   onDelete,
@@ -205,7 +207,7 @@ export function AccountCard({
   const loadResetCredits = useCallback(async () => {
     const requestId = ++resetRequestSeq.current;
 
-    if (account.auth_mode !== "chat_g_p_t") {
+    if (account.credentials_invalid || account.auth_mode !== "chat_g_p_t") {
       setResetCredits(null);
       return;
     }
@@ -221,7 +223,7 @@ export function AccountCard({
       if (requestId !== resetRequestSeq.current) return;
       setResetCredits(null);
     }
-  }, [account.auth_mode, account.id]);
+  }, [account.auth_mode, account.id, account.credentials_invalid]);
 
   const handleStatsLoaded = useCallback(
     (stats: AccountUsageStatsInfo | null) => {
@@ -252,7 +254,9 @@ export function AccountCard({
   return (
     <div
       className={`relative rounded-2xl border p-6 transition-all duration-200 ${
-        account.is_active
+        account.credentials_invalid
+          ? "bg-red-50/40 dark:bg-red-950/10 border-red-500 dark:border-red-400 ring-2 ring-red-100 dark:ring-red-900/30"
+          : account.is_active
           ? "bg-white dark:bg-gray-900 border-blue-400 shadow-sm ring-2 ring-blue-50 dark:ring-blue-900/20"
           : "bg-white dark:bg-gray-900 border-gray-200 dark:border-gray-700 hover:border-blue-200 hover:shadow-md dark:hover:border-gray-600"
       }`}
@@ -263,6 +267,9 @@ export function AccountCard({
           <div className="flex items-center gap-2 mb-1">
             {account.is_active && (
               <span className="shrink-0 rounded-md bg-blue-50 px-1.5 py-0.5 text-xs font-medium text-blue-600 dark:bg-blue-950 dark:text-blue-300">{t("Current")}</span>
+            )}
+            {account.credentials_invalid && (
+              <span className="shrink-0 rounded-md bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">{t("Login expired")}</span>
             )}
             {isEditing ? (
               <input
@@ -357,13 +364,16 @@ export function AccountCard({
       </div>
 
       {/* Actions */}
-      <div className="flex flex-wrap gap-2 mt-3">
-        {account.is_active ? (
+      <div className="mt-3 space-y-2">
+        <div className="flex w-full">
+        {account.credentials_invalid ? (
+          <button onClick={onRelogin} disabled={readOnly || !onRelogin || switching || switchDisabled} className="w-full whitespace-nowrap px-4 py-2 text-sm font-medium rounded-lg bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 disabled:opacity-50">{t("Sign in again")}</button>
+        ) : account.is_active ? (
           <button
             onClick={onRestart}
             disabled={readOnly || !desktopActions || !onRestart || switching || switchDisabled}
             title={t("Reapply this account and restart Codex")}
-            className="flex-1 px-4 py-2 text-sm font-medium rounded-lg bg-blue-100 hover:bg-blue-200 dark:bg-blue-900/30 dark:hover:bg-blue-900/50 text-blue-800 dark:text-blue-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full whitespace-nowrap px-4 py-2 text-sm font-medium rounded-lg bg-blue-100 hover:bg-blue-200 dark:bg-blue-900/30 dark:hover:bg-blue-900/50 text-blue-800 dark:text-blue-300 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {switching ? t("Restarting Codex...") : t("Restart Codex")}
           </button>
@@ -371,7 +381,7 @@ export function AccountCard({
           <button
             onClick={onSwitch}
             disabled={readOnly || switching || switchDisabled}
-            className={`flex-1 flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+            className={`w-full whitespace-nowrap flex items-center justify-center gap-1.5 px-4 py-2 text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
               codexRunning
                 ? "bg-blue-100 hover:bg-blue-200 dark:bg-blue-900/30 dark:hover:bg-blue-900/50 text-blue-800 dark:text-blue-300"
                 : "bg-gray-900 hover:bg-gray-800 dark:bg-gray-100 dark:hover:bg-gray-200 text-white dark:text-gray-900"
@@ -386,18 +396,21 @@ export function AccountCard({
             {switching ? t("Switching...") : t("Switch")}
           </button>
         )}
-        <button onClick={handleRefresh} disabled={isRefreshing} title={t("Refresh usage")} aria-label={t("Refresh usage")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-wait disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-blue-900/20"><ActionIcon name="refresh" spinning={isRefreshing} /></button>
+        </div>
+        <div className="flex flex-wrap gap-2">
+        <button onClick={handleRefresh} disabled={isRefreshing || account.credentials_invalid} title={t("Refresh usage")} aria-label={t("Refresh usage")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-wait disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-blue-900/20"><ActionIcon name="refresh" spinning={isRefreshing} /></button>
         <button onClick={onExport} disabled={readOnly || !desktopActions} title={t("Export JSON")} aria-label={t("Export JSON")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300 hover:brightness-95 disabled:opacity-50"><ActionIcon name="export" /></button>
         <button onClick={() => void onWarmup()} disabled={!desktopActions || warmingUp} title={t("Send warm-up")} aria-label={t("Send warm-up")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-700 dark:bg-amber-900/20 hover:brightness-95 disabled:opacity-50"><ActionIcon name="warmup" /></button>
         <button onClick={() => setStatsOpen(true)} title={t("Usage statistics")} aria-label={t("Usage statistics")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-600 hover:bg-blue-50 hover:text-blue-600 dark:bg-gray-800 dark:text-gray-300"><ActionIcon name="stats" /></button>
         {onToggleAutoWarmup && <button disabled={!desktopActions || autoWarmupManagedByAll} onClick={onToggleAutoWarmup} aria-pressed={autoWarmupEnabled} title={`${t("Auto Warm Up")}: ${autoWarmupLabel ?? t(autoWarmupEnabled ? "on" : "off")}`} aria-label={t("Auto Warm Up")} className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors disabled:opacity-50 ${autoWarmupEnabled ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-950" : "bg-gray-100 text-gray-500 dark:bg-gray-800"}`}><ActionIcon name="auto" /></button>}
         <button onClick={onDelete} disabled={readOnly} title={t("Remove account")} aria-label={t("Remove account")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-red-50 text-red-600 dark:bg-red-900/20 hover:brightness-95 disabled:opacity-50"><ActionIcon name="delete" /></button>
+        </div>
       </div>
       <AccountUsageStats
         accountId={account.id}
         accountName={masked ? t("Usage statistics") : account.name}
         onClose={closeStats}
-        enabled={account.auth_mode === "chat_g_p_t"}
+        enabled={!account.credentials_invalid && account.auth_mode === "chat_g_p_t"}
         open={statsOpen}
         usage={account.usage}
         usageLoading={account.usageLoading}

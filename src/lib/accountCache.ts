@@ -31,6 +31,7 @@ function cleanAccount(value: unknown): AccountWithUsage | undefined {
     id: value.id, name: value.name, email: string(value.email), plan_type: string(value.plan_type),
     subscription_expires_at: date(value.subscription_expires_at) ?? null,
     auth_mode: value.auth_mode as AccountWithUsage["auth_mode"], is_active: value.is_active === true,
+    credentials_invalid: value.credentials_invalid === true,
     created_at: date(value.created_at) ?? new Date(0).toISOString(), last_used_at: date(value.last_used_at) ?? null,
     metadata_recorded_at: date(value.metadata_recorded_at), usage: cleanUsage(value.usage, value.id), usageLoading: false,
   };

@@ -1,5 +1,5 @@
 import { CenteredSelect } from "./components/CenteredSelect";
-import { getAccountPlanKey, groupAccountsByPlan } from "./lib/accountGroups";
+import { groupAccountsByPlan, selectAccountPanel } from "./lib/accountGroups";
 import { ActionIcon } from "./components/ActionIcon";
 import { localizeError } from "./lib/errors";
 import { AccountTransferModal } from "./components/AccountTransferModal";
@@ -14,7 +14,7 @@ import { useRuntimePreferences } from "./hooks/useRuntimePreferences";
 import { finishForceClose } from "./lib/desktopReopen";
 import { useForceCloseCodexProcesses } from "./hooks/useForceCloseCodexProcesses";
 import { AccountCard, AddAccountModal, WindowResizeBorders } from "./components";
-import type { CodexProcessInfo, DockDisplayMode, UsageInfo } from "./types";
+import type { AccountWithUsage, CodexProcessInfo, DockDisplayMode, UsageInfo } from "./types";
 import {
   isTauriRuntime,
   invokeBackend,
@@ -154,6 +154,7 @@ function App() {
   }, [locale]);
   const {
     accounts,
+    listReady,
     loading,
     error,
     loadAccounts,
@@ -171,6 +172,8 @@ function App() {
   } = useAccounts(runtimePreferences.preferences, runtimePreferences.ready);
 
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+  const [reloginAccount, setReloginAccount] = useState<AccountWithUsage | null>(null);
+  const handleRelogin = (account: AccountWithUsage) => { setReloginAccount(account); setIsAddModalOpen(true); };
   const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
   const [transferMode, setTransferMode] = useState<"export" | "import">("export");
   const [exportAccountId, setExportAccountId] = useState<string | null>(null);
@@ -944,10 +947,8 @@ function App() {
     }
   };
 
-  const activeAccount = accounts.find((a) => a.is_active);
-  const otherAccounts = accounts.filter((a) => !a.is_active);
   const hasRunningProcesses = processInfo && processInfo.count > 0;
-  const sortedOtherAccounts = useMemo(() => {
+  const sortedAccounts = useMemo(() => {
     const getResetDeadline = (resetAt: number | null | undefined) =>
       resetAt ?? Number.POSITIVE_INFINITY;
 
@@ -975,7 +976,11 @@ function App() {
       return Math.max(0, 100 - usedPercent);
     };
 
-    return [...otherAccounts].sort((a, b) => {
+    return [...accounts].sort((a, b) => {
+      const invalidDiff = Number(!!a.credentials_invalid) - Number(!!b.credentials_invalid);
+      if (invalidDiff) return invalidDiff;
+      const activeDiff = Number(b.is_active) - Number(a.is_active);
+      if (activeDiff) return activeDiff;
       if (
         otherAccountsSort === "subscription_asc" ||
         otherAccountsSort === "subscription_desc"
@@ -1029,29 +1034,65 @@ function App() {
       if (deadlineDiff !== 0) return deadlineDiff;
       return a.name.localeCompare(b.name);
     });
-  }, [otherAccounts, otherAccountsSort]);
+  }, [accounts, otherAccountsSort]);
 
   const normalizedAccountSearchQuery = isAccountSearchEnabled
     ? accountSearchQuery.trim().toLowerCase()
     : "";
-  const [selectedPlanTab, setSelectedPlanTab] = useState("all");
+  const selectedPlanTab = runtimePreferences.preferences.selected_plan_tab;
+  const setSelectedPlanTab = (key: string) => { void runtimePreferences.change({ selected_plan_tab: key }); };
   const planTabs = useMemo(() => groupAccountsByPlan(accounts, true), [accounts]);
-  const effectivePlanTab = selectedPlanTab === "all" || planTabs.some(tab => tab.key === selectedPlanTab)
-    ? selectedPlanTab : "all";
+  const effectivePlanTab = selectedPlanTab;
   useEffect(() => {
-    if (effectivePlanTab !== selectedPlanTab) setSelectedPlanTab(effectivePlanTab);
-  }, [effectivePlanTab, selectedPlanTab]);
-  const hasMatchingActiveAccount = activeAccount !== undefined &&
-    matchesAccountSearch(activeAccount, normalizedAccountSearchQuery);
-  const visibleOtherAccounts = useMemo(
-    () => sortedOtherAccounts.filter(account =>
-      (effectivePlanTab === "all" || getAccountPlanKey(account) === effectivePlanTab) &&
-      matchesAccountSearch(account, normalizedAccountSearchQuery)),
-    [effectivePlanTab, normalizedAccountSearchQuery, sortedOtherAccounts]
-  );
-  const hasNoMatchingAccounts = !hasMatchingActiveAccount && visibleOtherAccounts.length === 0;
+    if (listReady && runtimePreferences.ready && selectedPlanTab !== "all" && !planTabs.some(tab => tab.key === selectedPlanTab)) {
+      void runtimePreferences.change({ selected_plan_tab: "all" });
+    }
+  }, [listReady, runtimePreferences.ready, runtimePreferences.change, selectedPlanTab, planTabs]);
+  const accountPanel = useMemo(() => selectAccountPanel(sortedAccounts, effectivePlanTab), [sortedAccounts, effectivePlanTab]);
+  const currentAccount = accountPanel.currentAccount;
+  const visibleAccounts = accountPanel.otherAccounts.filter(account => matchesAccountSearch(account, normalizedAccountSearchQuery));
+  const hasNoMatchingAccounts = !currentAccount && visibleAccounts.length === 0;
   const getPlanTabLabel = (key: string) => key === "all" ? t("All") : key === "free" ? t("Free accounts") :
     key === "api_key" ? t("API key accounts") : key === "unknown" ? t("Unknown plan") : key;
+
+  const renderAccountCard = (account: AccountWithUsage) => (
+    <AccountCard
+                      key={account.id}
+                      account={account}
+                      readOnly={webReadOnly}
+                      desktopActions={isTauriRuntime()}
+                      onSwitch={() => handleSwitch(account.id)}
+                      onRestart={() => void handleSwitch(account.id, true)}
+                      onRelogin={() => handleRelogin(account)}
+                      onWarmup={() => handleWarmupAccount(account.id, account.name)}
+                      onDelete={() => handleDelete(account.id)}
+                      onExport={() => openTransfer("export", account.id)}
+                      onRefresh={() =>
+                        refreshSingleUsage(account.id, { refreshMetadata: true })
+                      }
+                      onRename={(newName) => renameAccount(account.id, newName)}
+                      switching={switchingId === account.id}
+                      switchDisabled={switchingId !== null || isForceClosingCodex}
+                      codexRunning={hasRunningProcesses ?? false}
+                      warmingUp={
+
+                        warmingUpId === account.id ||
+                        autoWarmupRunningIds.has(account.id)
+                      }
+                      masked={maskedAccounts.has(account.id)}
+                      onToggleMask={() => toggleMask(account.id)}
+                      autoWarmupEnabled={
+                        autoWarmupAllEnabled || autoWarmupAccountIds.has(account.id)
+                      }
+                      autoWarmupManagedByAll={autoWarmupAllEnabled}
+                      autoWarmupLabel={getAutoWarmupLabel(
+                        account.usage,
+                        autoWarmupAllEnabled || autoWarmupAccountIds.has(account.id),
+                        autoWarmupRunningIds.has(account.id)
+                      )}
+                      onToggleAutoWarmup={() => toggleAutoWarmupAccount(account.id)}
+                    />
+  );
 
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
@@ -1314,7 +1355,7 @@ function App() {
               </div>
             )}
 
-            {visibleOtherAccounts.length > 0 && (
+            {visibleAccounts.length > 0 && (
                 <div className="flex items-center justify-end gap-3">
                   <div className="flex items-center gap-2">
                     <label htmlFor="other-accounts-sort" className="text-xs text-gray-500 dark:text-gray-400">
@@ -1359,6 +1400,7 @@ function App() {
             )}
 
             <div role="tabpanel" id="account-tab-panel" aria-labelledby={`account-tab-${effectivePlanTab}`} className="space-y-4">
+            {currentAccount && <section>{renderAccountCard(currentAccount)}</section>}
             {hasNoMatchingAccounts && (
               <div className="rounded-2xl border border-dashed border-gray-300 px-6 py-12 text-center dark:border-gray-700">
                 <h2 className="text-base font-semibold text-gray-900 dark:text-gray-100">
@@ -1370,87 +1412,16 @@ function App() {
               </div>
             )}
 
-            {/* Active Account */}
-            {activeAccount &&
-              hasMatchingActiveAccount && (
-                <section>
-                  <AccountCard
-                    account={activeAccount}
-                readOnly={webReadOnly}
-                desktopActions={isTauriRuntime()}
-                    onSwitch={() => { }}
-                    onRestart={() => void handleSwitch(activeAccount.id, true)}
-                    onWarmup={() =>
-                      handleWarmupAccount(activeAccount.id, activeAccount.name)
-                    }
-                    onDelete={() => handleDelete(activeAccount.id)}
-                    onExport={() => openTransfer("export", activeAccount.id)}
-                    onRefresh={() =>
-                      refreshSingleUsage(activeAccount.id, { refreshMetadata: true })
-                    }
-                    onRename={(newName) => renameAccount(activeAccount.id, newName)}
-                    switching={switchingId === activeAccount.id}
-                    switchDisabled={switchingId !== null || isForceClosingCodex}
-                    codexRunning={hasRunningProcesses ?? false}
-                    warmingUp={
-
-                      warmingUpId === activeAccount.id ||
-                      autoWarmupRunningIds.has(activeAccount.id)
-                    }
-                    masked={maskedAccounts.has(activeAccount.id)}
-                    onToggleMask={() => toggleMask(activeAccount.id)}
-                    autoWarmupEnabled={
-                      autoWarmupAllEnabled || autoWarmupAccountIds.has(activeAccount.id)
-                    }
-                    autoWarmupManagedByAll={autoWarmupAllEnabled}
-                    autoWarmupLabel={getAutoWarmupLabel(
-                      activeAccount.usage,
-                      autoWarmupAllEnabled || autoWarmupAccountIds.has(activeAccount.id),
-                      autoWarmupRunningIds.has(activeAccount.id)
-                    )}
-                    onToggleAutoWarmup={() => toggleAutoWarmupAccount(activeAccount.id)}
-                  />
-                </section>
-              )}
-
-            {visibleOtherAccounts.length > 0 && (
+            {visibleAccounts.length > 0 && (
               <section>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {visibleOtherAccounts.map((account) => (
-                    <AccountCard
-                      key={account.id}
-                      account={account}
-                      readOnly={webReadOnly}
-                      desktopActions={isTauriRuntime()}
-                      onSwitch={() => handleSwitch(account.id)}
-                      onWarmup={() => handleWarmupAccount(account.id, account.name)}
-                      onDelete={() => handleDelete(account.id)}
-                      onExport={() => openTransfer("export", account.id)}
-                      onRefresh={() =>
-                        refreshSingleUsage(account.id, { refreshMetadata: true })
-                      }
-                      onRename={(newName) => renameAccount(account.id, newName)}
-                      switching={switchingId === account.id}
-                      switchDisabled={switchingId !== null || isForceClosingCodex}
-                      codexRunning={hasRunningProcesses ?? false}
-                      warmingUp={
-
-                        warmingUpId === account.id ||
-                        autoWarmupRunningIds.has(account.id)
-                      }
-                      masked={maskedAccounts.has(account.id)}
-                      onToggleMask={() => toggleMask(account.id)}
-                      autoWarmupEnabled={
-                        autoWarmupAllEnabled || autoWarmupAccountIds.has(account.id)
-                      }
-                      autoWarmupManagedByAll={autoWarmupAllEnabled}
-                      autoWarmupLabel={getAutoWarmupLabel(
-                        account.usage,
-                        autoWarmupAllEnabled || autoWarmupAccountIds.has(account.id),
-                        autoWarmupRunningIds.has(account.id)
-                      )}
-                      onToggleAutoWarmup={() => toggleAutoWarmupAccount(account.id)}
-                    />
+                <div className="space-y-4">
+                  {groupAccountsByPlan(visibleAccounts, true).map(group => (
+                  <section key={group.key} className="col-span-full space-y-3">
+                    {effectivePlanTab === "all" && <h2 className="text-sm font-semibold">{getPlanTabLabel(group.key)}</h2>}
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {group.accounts.map(renderAccountCard)}
+                    </div>
+                  </section>
                   ))}
                 </div>
               </section>
@@ -1578,7 +1549,10 @@ function App() {
       {/* Add Account Modal */}
       <AddAccountModal
         isOpen={isAddModalOpen}
-        onClose={() => setIsAddModalOpen(false)}
+        key={reloginAccount?.id ?? "add"}
+        initialName={reloginAccount?.name}
+        relogin={!!reloginAccount}
+        onClose={() => { setIsAddModalOpen(false); setReloginAccount(null); }}
         onStartOAuth={startOAuthLogin}
         onCompleteOAuth={completeOAuthLogin}
         onCancelOAuth={cancelOAuthLogin}

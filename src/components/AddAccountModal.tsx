@@ -8,6 +8,8 @@ import {
 
 interface AddAccountModalProps {
   isOpen: boolean;
+  initialName?: string;
+  relogin?: boolean;
   onClose: () => void;
   onStartOAuth: (name: string) => Promise<{ auth_url: string }>;
   onCompleteOAuth: () => Promise<unknown>;
@@ -17,6 +19,8 @@ interface AddAccountModalProps {
 
 export function AddAccountModal({
   isOpen,
+  initialName = "",
+  relogin = false,
   onClose,
   onStartOAuth,
   onCompleteOAuth,
@@ -24,7 +28,7 @@ export function AddAccountModal({
 }: AddAccountModalProps) {
   const locale = useLocale();
   const t = (text: string) => tr(text, locale);
-  const [name, setName] = useState("");
+  const [name, setName] = useState(initialName);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [oauthPending, setOauthPending] = useState(false);
@@ -78,7 +82,7 @@ export function AddAccountModal({
       <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-2xl w-full max-w-md mx-4 shadow-xl">
         {/* Header */}
         <div className="flex items-center justify-between p-5 border-b border-gray-100 dark:border-gray-800">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{t("Add Account")}</h2>
+          <h2 className="text-lg font-semibold text-gray-900 dark:text-gray-100">{t(relogin ? "Sign in again" : "Add Account")}</h2>
           <button
             onClick={handleClose}
             className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"

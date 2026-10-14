@@ -1,4 +1,9 @@
 export default {
+  "Login expired": "Login expired",
+  "Current category": "Current category",
+  "Sign in again": "Sign in again",
+  "Account credentials invalid; sign in again": "Account credentials invalid; sign in again",
+  "Refresh the account in use or valid accounts in the selected category.": "Refresh the account in use or valid accounts in the selected category.",
   "Import / Export": "Import / Export",
   "General": "General",
   "Accounts and automation": "Accounts and automation",

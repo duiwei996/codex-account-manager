@@ -288,6 +288,7 @@ pub(crate) fn upsert_account(
     store: &mut AccountsStore,
     mut account: StoredAccount,
 ) -> Result<StoredAccount> {
+    account.credentials_invalid = false;
     super::validation::validate_account(&account)?;
     let existing = store
         .accounts
@@ -333,12 +334,45 @@ pub(crate) fn upsert_account(
 
 /// Add or replace an account using the same identity rules as batch import.
 pub fn add_account(account: StoredAccount) -> Result<StoredAccount> {
-    update_accounts(|store| upsert_account(store, account))
+    let stored = update_accounts(|store| upsert_account(store, account))?;
+    crate::commands::usage::invalidate_account_metadata(&[stored.id.clone()]);
+    Ok(stored)
 }
 
 #[cfg(test)]
 mod account_merge_tests {
     use super::*;
+    #[test]
+    fn replacement_clears_invalid_state_and_preserves_identity() {
+        let mut store = AccountsStore::default();
+        let original = upsert_account(&mut store, login("team", "old")).unwrap();
+        store.accounts[0].credentials_invalid = true;
+        let replaced = upsert_account(&mut store, login("team", "new")).unwrap();
+        assert_eq!(original.id, replaced.id);
+        assert_eq!(original.created_at, replaced.created_at);
+        assert!(!replaced.credentials_invalid);
+        assert_eq!(store.accounts.len(), 1);
+    }
+
+    #[test]
+    fn network_and_permissions_errors_do_not_disable_accounts() {
+        for error in [
+            "network timeout",
+            "API error: 403 Forbidden",
+            "429 Too Many Requests",
+            "Token refresh failed: 500",
+        ] {
+            assert!(!is_terminal_auth_error(error));
+        }
+        for error in [
+            "API error: 401 Unauthorized",
+            "invalid_grant",
+            "refresh_token_reused",
+        ] {
+            assert!(is_terminal_auth_error(error));
+        }
+    }
+
     #[test]
     fn suffixes_only_disambiguate_names_with_the_same_type() {
         let mut store = AccountsStore::default();
@@ -801,4 +835,38 @@ mod tests {
         assert_eq!(account_id.as_deref(), Some("workspace-a"));
         assert_eq!(refresh_token(&store.accounts[0]), "refresh-a2");
     }
+}
+
+/// Only terminal authentication errors disable an account until credentials are replaced.
+pub(crate) fn is_terminal_auth_error(message: &str) -> bool {
+    let value = message.to_lowercase();
+    [
+        "401",
+        "invalid_grant",
+        "refresh_token_reused",
+        "refresh_token_expired",
+        "refresh_token_invalidated",
+        "token_revoked",
+        "account_deactivated",
+        "account credentials invalid",
+    ]
+    .iter()
+    .any(|code| value.contains(code))
+}
+
+pub(crate) fn mark_credentials_invalid(account: &StoredAccount, message: &str) -> Result<()> {
+    if !is_terminal_auth_error(message) {
+        return Ok(());
+    }
+    update_accounts(|store| {
+        if let Some(current) = store.accounts.iter_mut().find(|a| a.id == account.id) {
+            // A delayed request must not invalidate a newly imported login.
+            if serde_json::to_value(&current.auth_data)?
+                == serde_json::to_value(&account.auth_data)?
+            {
+                current.credentials_invalid = true;
+            }
+        }
+        Ok(())
+    })
 }

@@ -63,3 +63,23 @@ test("other accounts keep their normal switch action", async () => {
     assert.deepEqual(calls, ["switch"]);
   });
 });
+
+test("invalid active and inactive accounts offer login instead of switch or restart", async () => {
+  for (const is_active of [true, false]) {
+    let logins = 0;
+    await withCard({account: {id: "invalid", name: "Invalid", is_active, auth_mode: "api_key", credentials_invalid: true},
+      onRelogin: () => logins++}, async (container, calls) => {
+      const buttons = [...container.querySelectorAll("button")];
+      const login = buttons.find(button => button.textContent === "重新登录");
+      assert.ok(login && !login.disabled);
+      assert.match(container.firstElementChild.className, /border-red-500/);
+      assert.match(container.textContent, /登录已失效/);
+      if (is_active) assert.match(container.textContent, /当前/);
+      assert.ok(!buttons.some(button => button.textContent === "切换" || button.textContent === "重启"));
+      assert.equal(buttons.find(button => button.title === "刷新用量").disabled, true);
+      await act(async () => login.click());
+      assert.equal(logins, 1);
+      assert.deepEqual(calls, []);
+    });
+  }
+});

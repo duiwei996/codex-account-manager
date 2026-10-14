@@ -51,9 +51,10 @@ pub enum AccountSwitchMode {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RefreshScope {
-    #[default]
     Current,
-    All,
+    #[default]
+    #[serde(alias = "all")]
+    Category,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -64,6 +65,7 @@ pub struct AppSettings {
     pub automatic_update_checks: bool,
     pub refresh_scope: RefreshScope,
     pub refresh_interval_seconds: u64,
+    pub selected_plan_tab: String,
     pub account_switch_mode: AccountSwitchMode,
     pub tray_display_mode: TrayDisplayMode,
     pub dock_display_mode: DockDisplayMode,
@@ -78,8 +80,9 @@ impl Default for AppSettings {
             autostart_initialized: false,
             startup_minimized: true,
             automatic_update_checks: true,
-            refresh_scope: RefreshScope::Current,
+            refresh_scope: RefreshScope::Category,
             refresh_interval_seconds: 60,
+            selected_plan_tab: "all".into(),
             account_switch_mode: AccountSwitchMode::default(),
             tray_display_mode: TrayDisplayMode::default(),
             dock_display_mode: DockDisplayMode::default(),
@@ -90,6 +93,29 @@ impl Default for AppSettings {
 }
 
 impl AppSettings {
+    pub fn includes_category(&self, account: &StoredAccount) -> bool {
+        let key = if matches!(account.auth_mode, AuthMode::ApiKey) {
+            "api_key".to_owned()
+        } else {
+            account
+                .plan_type
+                .as_deref()
+                .map(str::trim)
+                .filter(|key| !key.is_empty())
+                .unwrap_or("unknown")
+                .to_lowercase()
+        };
+        self.selected_plan_tab == "all" || self.selected_plan_tab == key
+    }
+
+    pub fn should_refresh(&self, account: &StoredAccount, active_id: Option<&str>) -> bool {
+        !account.credentials_invalid
+            && match self.refresh_scope {
+                RefreshScope::Current => active_id == Some(account.id.as_str()),
+                RefreshScope::Category => self.includes_category(account),
+            }
+    }
+
     pub fn usage_refresh_delay_seconds(&self, foreground: bool) -> u64 {
         let interval = if [30, 60, 120, 300, 600].contains(&self.refresh_interval_seconds) {
             self.refresh_interval_seconds
@@ -136,6 +162,8 @@ pub struct StoredAccount {
     /// Prevent older auth.json credentials from overwriting a newly rotated refresh token.
     #[serde(default)]
     pub credentials_updated_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    pub credentials_invalid: bool,
 }
 
 impl StoredAccount {
@@ -178,6 +206,7 @@ impl StoredAccount {
             created_at: Utc::now(),
             last_used_at: None,
             credentials_updated_at: None,
+            credentials_invalid: false,
         }
     }
 
@@ -209,6 +238,7 @@ impl StoredAccount {
             created_at: Utc::now(),
             last_used_at: None,
             credentials_updated_at: None,
+            credentials_invalid: false,
         }
     }
 }
@@ -400,6 +430,7 @@ pub struct AccountInfo {
     pub subscription_expires_at: Option<DateTime<Utc>>,
     pub auth_mode: AuthMode,
     pub is_active: bool,
+    pub credentials_invalid: bool,
     pub created_at: DateTime<Utc>,
     pub last_used_at: Option<DateTime<Utc>>,
 }
@@ -416,6 +447,7 @@ impl AccountInfo {
             subscription_expires_at: None,
             auth_mode: account.auth_mode,
             is_active: active_id == Some(&account.id),
+            credentials_invalid: account.credentials_invalid,
             created_at: account.created_at,
             last_used_at: account.last_used_at,
         }

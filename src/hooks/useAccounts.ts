@@ -17,8 +17,6 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
   const [error, setError] = useState<string | null>(null);
   const accountsRef = useRef<AccountWithUsage[]>(accounts);
   const [listReady, setListReady] = useState(false);
-  const initialUsageFetch = useRef(false);
-  const initialMetadataFetch = useRef(false);
   const metadataRefreshInFlightRef = useRef(new Set<string>());
   const maxConcurrentUsageRequests = 4;
   const loadGenerationRef = useRef(0);
@@ -116,7 +114,7 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
     async (
       accountList?: AccountInfo[] | AccountWithUsage[]
     ) => {
-      const list = accountList ?? accountsRef.current;
+      const list = (accountList ?? accountsRef.current).filter(account => !account.credentials_invalid);
       const dueAccounts = list.filter(
         (account) => !metadataRefreshInFlightRef.current.has(account.id)
       );
@@ -164,7 +162,7 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
       options?: { refreshMetadata?: boolean }
     ) => {
       try {
-        const list = accountList ?? accountsRef.current;
+        const list = (accountList ?? accountsRef.current).filter(account => !account.credentials_invalid);
         if (list.length === 0) {
           return;
         }
@@ -219,6 +217,7 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
 
         reportUsageToTray(Array.from(usageResults.values()));
         await metadataPromise;
+        if (Array.from(usageResults.values()).some(usage => usage.error)) await loadAccounts(true);
         return Array.from(usageResults.values());
       } catch (err) {
         console.error("Failed to refresh usage:", err);
@@ -227,6 +226,7 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
     },
     [
       buildUsageError,
+      loadAccounts,
       requestUsage,
       maxConcurrentUsageRequests,
       refreshMetadata,
@@ -241,6 +241,7 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
   ) => {
     try {
       const account = accountsRef.current.find((item) => item.id === accountId);
+      if (account?.credentials_invalid) throw new Error("Account credentials invalid; sign in again");
       const metadataPromise = options?.refreshMetadata && account
         ? refreshMetadata([account])
         : Promise.resolve();
@@ -258,6 +259,7 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
       );
       reportUsageToTray([usage]);
       await metadataPromise;
+      if (usage.error) await loadAccounts(true);
       return usage;
     } catch (err) {
       console.error("Failed to refresh single usage:", err);
@@ -273,9 +275,10 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
             : a
         )
       );
+      await loadAccounts(true);
       throw err;
     }
-  }, [buildUsageError, refreshMetadata, reportUsageToTray, requestUsage]);
+  }, [buildUsageError, loadAccounts, refreshMetadata, reportUsageToTray, requestUsage]);
 
   const warmupInFlight = useRef(new Map<string, Promise<void>>());
   const warmupAccount = useCallback((accountId: string): Promise<void> => {
@@ -421,10 +424,8 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
       polling = true;
       // Desktop repeats are owned by the native poller. React only requests the
       // initial/switch/settings refresh, then consumes native results.
-      const selected = selectRefreshAccounts(accountsRef.current, preferences.refresh_scope);
-      const missing = initialUsageFetch.current ? [] : accountsRef.current.filter(account => !account.usage?.recorded_at);
-      initialUsageFetch.current = true;
-      const targets = [...new Map([...selected, ...missing].map(account => [account.id, account])).values()];
+      const selected = selectRefreshAccounts(accountsRef.current, preferences.refresh_scope, preferences.selected_plan_tab);
+      const targets = selected;
       await refreshUsage(targets).catch(() => {});
       polling = false;
       if (!disposed && !isTauriRuntime()) timer = window.setTimeout(poll, refreshDelay(preferences.refresh_interval_seconds, foreground()));
@@ -440,20 +441,18 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
     timer = window.setTimeout(poll, 0);
     if (!isTauriRuntime()) document.addEventListener("visibilitychange", visibilityChanged);
     return () => { disposed = true; window.clearTimeout(timer); document.removeEventListener("visibilitychange", visibilityChanged); };
-  }, [activeAccountId, preferencesReady, listReady, preferences.refresh_scope, preferences.refresh_interval_seconds, refreshUsage]);
+  }, [activeAccountId, preferencesReady, listReady, preferences.refresh_scope, preferences.selected_plan_tab, preferences.refresh_interval_seconds, refreshUsage]);
 
   useEffect(() => {
     if (!preferencesReady || !listReady) return;
     const refresh = () => {
-      const selected = selectRefreshAccounts(accountsRef.current, preferences.refresh_scope);
-      const missing = initialMetadataFetch.current ? [] : accountsRef.current.filter(account => !account.metadata_recorded_at);
-      initialMetadataFetch.current = true;
-      void refreshMetadata([...new Map([...selected, ...missing].map(account => [account.id, account])).values()]);
+      const selected = selectRefreshAccounts(accountsRef.current, preferences.refresh_scope, preferences.selected_plan_tab);
+      void refreshMetadata(selected);
     };
     refresh();
     const timer = window.setInterval(refresh, 6 * 60 * 60 * 1000);
     return () => window.clearInterval(timer);
-  }, [activeAccountId, preferencesReady, listReady, preferences.refresh_scope, refreshMetadata]);
+  }, [activeAccountId, preferencesReady, listReady, preferences.refresh_scope, preferences.selected_plan_tab, refreshMetadata]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -487,6 +486,7 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
 
   return {
     accounts,
+    listReady,
     loading,
     error,
     loadAccounts,

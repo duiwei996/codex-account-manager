@@ -20,5 +20,14 @@ export function groupAccountsByPlan<T extends AccountInfo>(accounts: readonly T[
   return [...groups].sort(([a], [b]) => {
     const rank = (key: string) => key === "unknown" ? 100 : order.includes(key) ? order.indexOf(key) : 50;
     return rank(a) - rank(b) || a.localeCompare(b);
-  }).map(([key, accounts]) => ({ key, accounts }));
+  }).map(([key, accounts]) => ({ key, accounts: [...accounts].sort((a, b) => Number(!!a.credentials_invalid) - Number(!!b.credentials_invalid)) }));
+}
+
+/** The account in use stays pinned independently of the selected category. */
+export function selectAccountPanel<T extends AccountInfo>(accounts: readonly T[], selectedPlan: string) {
+  return {
+    currentAccount: accounts.find(account => account.is_active),
+    otherAccounts: accounts.filter(account => !account.is_active &&
+      (selectedPlan === "all" || getAccountPlanKey(account) === selectedPlan)),
+  };
 }

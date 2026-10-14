@@ -71,6 +71,9 @@ static USAGE_REQUESTS: std::sync::LazyLock<
 > = std::sync::LazyLock::new(|| std::sync::Mutex::new(HashMap::new()));
 static USAGE_SLOTS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
 pub async fn get_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
+    if account.credentials_invalid {
+        anyhow::bail!("Account credentials invalid; sign in again");
+    }
     use sha2::{Digest, Sha256};
     let fingerprint: [u8; 32] = Sha256::digest(&*zeroize::Zeroizing::new(serde_json::to_vec(
         &account.auth_data,
@@ -96,7 +99,15 @@ pub async fn get_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
         }
     }
     let _slot = USAGE_SLOTS.acquire().await?;
-    let usage = fetch_account_usage(account).await?;
+    let result = fetch_account_usage(account).await;
+    let error = match &result {
+        Ok(usage) => usage.error.clone(),
+        Err(error) => Some(error.to_string()),
+    };
+    if let Some(error) = error {
+        crate::auth::storage::mark_credentials_invalid(account, &error)?;
+    }
+    let usage = result?;
     *cached = Some((std::time::Instant::now(), fingerprint, usage.clone()));
     Ok(usage)
 }
@@ -185,6 +196,9 @@ async fn get_usage_with_chatgpt_auth(account: &StoredAccount) -> Result<UsageInf
         let refreshed_account = refresh_chatgpt_tokens(&fresh_account).await?;
         let (retry_token, retry_account_id) = extract_chatgpt_auth(&refreshed_account)?;
         let retry_response = send_chatgpt_usage_request(retry_token, retry_account_id).await?;
+        if retry_response.status() == StatusCode::UNAUTHORIZED {
+            crate::auth::storage::mark_credentials_invalid(&refreshed_account, "401 Unauthorized")?;
+        }
         return parse_usage_response(
             &refreshed_account.id,
             &refreshed_account.name,

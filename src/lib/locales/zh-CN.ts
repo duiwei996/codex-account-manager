@@ -1,4 +1,9 @@
 export default {
+  "Login expired": "登录已失效",
+  "Current category": "当前分类",
+  "Sign in again": "重新登录",
+  "Account credentials invalid; sign in again": "账号凭据已失效，请重新登录或导入最新凭据",
+  "Refresh the account in use or valid accounts in the selected category.": "刷新当前使用的账号，或当前分类下的有效账号；失效账号不刷新。",
   "Import / Export": "导入 / 导出",
   "General": "常规",
   "Accounts and automation": "账号与自动化",

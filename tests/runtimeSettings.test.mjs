@@ -16,7 +16,7 @@ const callbacks = new Map();
 window.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener(_event, id) { subscriptions.delete(id); } };
 const calls = [];
 let callbackId = 0;
-const defaults = { autostart_enabled: true, startup_minimized: true, automatic_update_checks: true, refresh_scope: "current", refresh_interval_seconds: 60 };
+const defaults = { autostart_enabled: true, startup_minimized: true, automatic_update_checks: true, selected_plan_tab: "all", refresh_scope: "current", refresh_interval_seconds: 60 };
 let saved = { ...defaults };
 const account = (id, active = false) => ({ id, name: id, email: null, plan_type: null, auth_mode: "api_key", is_active: active, created_at: "2026-01-01T00:00:00Z", last_used_at: null });
 let accounts = [account("first", true), account("second")];
@@ -119,7 +119,7 @@ test("automatic current refresh follows switching, rename makes no usage request
   function AccountHarness({ scope = "current" }) { controller = useAccounts({ ...defaults, refresh_scope: scope }, true); return null; }
   await act(async () => root.render(createElement(AccountHarness)));
   await settle();
-  assert.deepEqual(calls.filter(call => call.command === 'get_usage').map(call => call.args.accountId), ['first', 'second']);
+  assert.deepEqual(calls.filter(call => call.command === 'get_usage').map(call => call.args.accountId), ['first']);
   calls.length = 0;
   await act(async () => controller.switchAccount('second'));
   await settle();
@@ -132,7 +132,7 @@ test("automatic current refresh follows switching, rename makes no usage request
   await settle();
   assert.deepEqual(calls.filter(call => call.command === 'get_usage').map(call => call.args.accountId), ['added']);
   calls.length = 0;
-  await act(async () => root.render(createElement(AccountHarness, { scope: "all" })));
+  await act(async () => root.render(createElement(AccountHarness, { scope: "category" })));
   await settle();
   assert.deepEqual(calls.filter(call => call.command === 'get_usage').map(call => call.args.accountId).sort(), ['added', 'first', 'second']);
 });
@@ -157,7 +157,7 @@ test("tray opening follows the selected refresh scope and metadata-only changes 
   calls.length = 0;
   await emit('accounts-changed');
   assert.equal(calls.filter(call => call.command === 'get_usage').length, 0);
-  saved.refresh_scope = 'all';
+  saved.refresh_scope = 'category';
   await emit('tray-refresh');
   assert.deepEqual(calls.filter(call => call.command === 'get_usage').map(call => call.args.accountId).sort(), ['first', 'second']);
 });
@@ -203,6 +203,7 @@ test("display cache whitelists fields and restores values through expired author
   failUsage = false;
   await act(async () => root.render(createElement(Harness)));
   await settle();
+  await act(async () => controller.refreshSingleUsage("second"));
   const timestamp = controller.accounts[0].usage.recorded_at;
   assert.equal(controller.accounts[1].usage.primary_used_percent, 25);
   writeAccountCache(controller.accounts.map(a => ({ ...a, access_token: 'secret', usage: { ...a.usage, token: 'secret' } })));
@@ -265,4 +266,45 @@ test("automatic warmup requires fresh quota, skips full weeks and remembers the 
   assert.equal(getDueAutoWarmupWindow({ ...usage, primary_resets_at: usage.primary_resets_at - 6 * 60 }, undefined, now), null);
   assert.equal(getDueAutoWarmupWindow(usage, { lastSuccessfulWarmupAt: now - 30_000 }, now), null);
   assert.equal(getDueAutoWarmupWindow(usage, { lastAutoWindowKey: `${due.kind}:${due.windowMinutes}:${due.resetsAt}` }, now), null);
+});
+
+test("tab choice persists across remount and queued changes preserve the latest choice", async () => {
+  await act(async () => root.render(null));
+  saved = {...defaults};
+  let controller;
+  function Harness() { controller = useRuntimePreferences(); return null; }
+  await act(async () => root.render(createElement(Harness)));
+  await settle();
+  await act(async () => Promise.all([controller.change({selected_plan_tab: "team"}), controller.change({selected_plan_tab: "plus"}), controller.change({refresh_scope: "category"})]));
+  assert.equal(saved.selected_plan_tab, "plus");
+  assert.equal(saved.refresh_scope, "category");
+  await act(async () => root.render(null));
+  await act(async () => root.render(createElement(Harness)));
+  await settle();
+  assert.equal(controller.preferences.selected_plan_tab, "plus");
+  assert.equal(controller.preferences.refresh_scope, "category");
+});
+
+test("category refresh excludes invalid accounts on first load and follows tab changes", async () => {
+  await act(async () => root.render(null));
+  failUsage = false;
+  localStorage.removeItem("codex-switcher-account-display-cache-v1");
+  accounts = [
+    {...account("team"), auth_mode: "chat_g_p_t", plan_type: "team"},
+    {...account("invalid", true), auth_mode: "chat_g_p_t", plan_type: "team", credentials_invalid: true},
+    {...account("plus"), auth_mode: "chat_g_p_t", plan_type: "plus"},
+  ];
+  let controller;
+  function Harness({tab}) { controller = useAccounts({...defaults, refresh_scope: "category", selected_plan_tab: tab}, true); return null; }
+  calls.length = 0;
+  await act(async () => root.render(createElement(Harness, {tab: "team"})));
+  await settle();
+  assert.deepEqual(calls.filter(c => c.command === "get_usage").map(c => c.args.accountId), ["team"]);
+  assert.ok(!calls.some(c => c.command === "refresh_account_metadata" && c.args.accountId === "invalid"));
+  writeAccountCache(controller.accounts);
+  assert.equal(JSON.parse(localStorage.getItem("codex-switcher-account-display-cache-v1")).find(a => a.id === "invalid").credentials_invalid, true);
+  calls.length = 0;
+  await act(async () => root.render(createElement(Harness, {tab: "plus"})));
+  await settle();
+  assert.deepEqual(calls.filter(c => c.command === "get_usage").map(c => c.args.accountId), ["plus"]);
 });

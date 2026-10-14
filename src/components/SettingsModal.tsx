@@ -176,9 +176,9 @@ export function SettingsModal({
             {section === "accounts" && <>
             <div>
               <div className={rowClassName}>
-                <div><label htmlFor="refresh-scope" className={labelClassName}>{translate("Automatic refresh scope")}</label><p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{translate("Current means the account in use. Other accounts can be refreshed manually.")}</p></div>
-                <CenteredSelect id="refresh-scope" className={selectClassName} value={preferences.refresh_scope} disabled={!ready || savingPreferences} onChange={event => void change({ refresh_scope: event.target.value as "current" | "all" })}>
-                  <option value="current">{translate("Current account")}</option><option value="all">{translate("All accounts")}</option>
+                <div><label htmlFor="refresh-scope" className={labelClassName}>{translate("Automatic refresh scope")}</label><p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{translate("Refresh the account in use or valid accounts in the selected category.")}</p></div>
+                <CenteredSelect id="refresh-scope" className={selectClassName} value={preferences.refresh_scope} disabled={!ready || savingPreferences} onChange={event => void change({ refresh_scope: event.target.value as "current" | "category" })}>
+                  <option value="current">{translate("Current account")}</option><option value="category">{translate("Current category")}</option>
                 </CenteredSelect>
               </div>
               <div className={rowClassName}>

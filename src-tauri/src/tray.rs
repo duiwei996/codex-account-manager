@@ -10,17 +10,13 @@ use tauri::menu::Submenu;
 use tauri::{
     menu::{CheckMenuItemBuilder, Menu, MenuItemBuilder, PredefinedMenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Emitter, Manager, PhysicalPosition, Runtime, WebviewUrl, WebviewWindowBuilder,
-    WindowEvent,
+    AppHandle, Emitter, Manager, Runtime,
 };
 
 use crate::{
     api::usage::refresh_all_usage,
     auth::{get_accounts_file, load_accounts, load_app_settings},
-    commands::{
-        is_codex_running_switch_block, restore_main_window, switch_account_by_id,
-        window::TRAY_WINDOW,
-    },
+    commands::{is_codex_running_switch_block, restore_main_window, switch_account_by_id},
     types::{AccountsStore, TrayDisplayMode, UsageInfo},
 };
 
@@ -31,14 +27,11 @@ static TRAY_SWITCH_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 const TRAY_ID: &str = "codex-switcher-tray";
 const TRAY_ICON: tauri::image::Image<'static> = tauri::include_image!("./icons/tray.png");
-const TRAY_REFRESH_EVENT: &str = "tray-refresh";
 const ACCOUNTS_CHANGED_EVENT: &str = "accounts-changed";
 const SWITCH_ACCOUNT_BLOCKED_EVENT: &str = "switch-account-blocked";
 const ACCOUNT_ITEM_PREFIX: &str = "account:";
 const OPEN_ITEM_ID: &str = "open";
 const QUIT_ITEM_ID: &str = "quit";
-const TRAY_WIDTH: f64 = 300.0;
-const TRAY_HEIGHT: f64 = 420.0;
 const ACCOUNT_METADATA_REFRESH_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 
 #[derive(Clone, serde::Serialize)]
@@ -78,12 +71,6 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
         .show_menu_on_left_click(false);
 
     builder.build(app)?;
-    // A popup WebView failure must not remove the system tray entry. The native
-    // right-click menu remains available, and a left click can retry the popup.
-    #[cfg(not(target_os = "linux"))]
-    if let Err(error) = create_tray_window(app) {
-        eprintln!("Failed to create tray popup (native tray remains available): {error}");
-    }
     refresh_menu(app);
 
     watch_accounts_file(app.clone());
@@ -230,96 +217,17 @@ pub fn ingest_usage<R: Runtime>(app: &AppHandle<R>, usages: Vec<UsageInfo>) {
     refresh_menu(app);
 }
 
-// ============================================================================
-// React popup window (used on macOS/Windows via tray click events)
-// ============================================================================
-
-#[cfg_attr(target_os = "linux", allow(dead_code))]
-fn create_tray_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    if app.get_webview_window(TRAY_WINDOW).is_some() {
-        return Ok(());
-    }
-
-    let window = WebviewWindowBuilder::new(app, TRAY_WINDOW, WebviewUrl::App("tray.html".into()))
-        .title("Codex Account Manager")
-        .inner_size(TRAY_WIDTH, TRAY_HEIGHT)
-        .resizable(false)
-        .decorations(false)
-        .transparent(true)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .visible(false)
-        .build()?;
-
-    // Hide the popup as soon as it loses focus so it behaves like a native menu.
-    let app_handle = app.clone();
-    window.on_window_event(move |event| {
-        if let WindowEvent::Focused(false) = event {
-            if let Some(window) = app_handle.get_webview_window(TRAY_WINDOW) {
-                let _ = window.hide();
-            }
-        }
-    });
-
-    Ok(())
-}
-
+// Left-click always restores and focuses the main application window.
 #[cfg_attr(target_os = "linux", allow(dead_code))]
 fn handle_tray_icon_event<R: Runtime>(tray: &tauri::tray::TrayIcon<R>, event: TrayIconEvent) {
     if let TrayIconEvent::Click {
         button: MouseButton::Left,
         button_state: MouseButtonState::Up,
-        position,
         ..
     } = event
     {
-        toggle_tray_window(tray.app_handle(), position);
+        restore_main_window(tray.app_handle());
     }
-}
-
-#[cfg_attr(target_os = "linux", allow(dead_code))]
-fn toggle_tray_window<R: Runtime>(app: &AppHandle<R>, cursor: PhysicalPosition<f64>) {
-    if app.get_webview_window(TRAY_WINDOW).is_none() {
-        if let Err(error) = create_tray_window(app) {
-            eprintln!("Failed to create tray popup: {error}");
-            restore_main_window(app);
-            return;
-        }
-    }
-    let Some(window) = app.get_webview_window(TRAY_WINDOW) else {
-        return;
-    };
-
-    if window.is_visible().unwrap_or(false) {
-        let _ = window.hide();
-        return;
-    }
-
-    position_near_cursor(&window, cursor);
-    let _ = window.show();
-    let _ = window.set_focus();
-    let _ = app.emit_to(TRAY_WINDOW, TRAY_REFRESH_EVENT, ());
-}
-
-#[cfg_attr(target_os = "linux", allow(dead_code))]
-fn position_near_cursor<R: Runtime>(
-    window: &tauri::WebviewWindow<R>,
-    cursor: PhysicalPosition<f64>,
-) {
-    let size = window.outer_size().ok();
-    let width = size.map(|s| s.width as f64).unwrap_or(TRAY_WIDTH);
-    let height = size.map(|s| s.height as f64).unwrap_or(TRAY_HEIGHT);
-
-    let x = (cursor.x - width / 2.0).max(0.0);
-    // macOS menu bar sits at the top, so drop the popup below the icon.
-    // Other platforms keep the tray at the bottom, so float it above the cursor.
-    let y = if cfg!(target_os = "macos") {
-        cursor.y + 4.0
-    } else {
-        (cursor.y - height - 4.0).max(0.0)
-    };
-
-    let _ = window.set_position(PhysicalPosition::new(x, y));
 }
 
 // ============================================================================
@@ -327,10 +235,16 @@ fn position_near_cursor<R: Runtime>(
 // ============================================================================
 
 fn build_menu<R: Runtime>(app: &AppHandle<R>, store: &AccountsStore) -> tauri::Result<Menu<R>> {
-    let zh = load_app_settings().unwrap_or_default().ui_language == "zh-CN";
+    let settings = load_app_settings().unwrap_or_default();
+    let zh = settings.ui_language == "zh-CN";
     let menu = Menu::new(app)?;
 
-    if store.accounts.is_empty() {
+    let accounts: Vec<_> = store
+        .accounts
+        .iter()
+        .filter(|a| !a.credentials_invalid && settings.includes_category(a))
+        .collect();
+    if accounts.is_empty() {
         menu.append(
             &MenuItemBuilder::with_id(
                 "empty",
@@ -340,7 +254,7 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>, store: &AccountsStore) -> tauri::R
             .build(app)?,
         )?;
     } else {
-        for account in &store.accounts {
+        for account in accounts {
             let label = format!("{}{}", account.name, usage_suffix(&account.id));
             let item =
                 CheckMenuItemBuilder::with_id(account_menu_id(&account.id), menu_label(&label))
@@ -442,7 +356,7 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
     }
 }
 
-fn refresh_menu<R: Runtime>(app: &AppHandle<R>) {
+pub(crate) fn refresh_menu<R: Runtime>(app: &AppHandle<R>) {
     let app_handle = app.clone();
     if let Err(error) = app.run_on_main_thread(move || {
         refresh_menu_on_main_thread(&app_handle);
@@ -722,8 +636,7 @@ fn poll_account_usage<R: Runtime>(app: AppHandle<R>) {
                 .accounts
                 .into_iter()
                 .filter(|account| {
-                    settings.refresh_scope == crate::types::RefreshScope::All
-                        || store.active_account_id.as_deref() == Some(account.id.as_str())
+                    settings.should_refresh(account, store.active_account_id.as_deref())
                 })
                 .collect();
             let usages = tauri::async_runtime::block_on(refresh_all_usage(&accounts));
@@ -747,8 +660,7 @@ fn poll_account_metadata<R: Runtime>(app: AppHandle<R>) {
                     .accounts
                     .into_iter()
                     .filter(|account| {
-                        settings.refresh_scope == crate::types::RefreshScope::All
-                            || store.active_account_id.as_deref() == Some(account.id.as_str())
+                        settings.should_refresh(account, store.active_account_id.as_deref())
                     })
                     .collect::<Vec<_>>()
             })

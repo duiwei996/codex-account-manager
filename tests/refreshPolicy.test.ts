@@ -7,7 +7,7 @@ test("current scope only requests the active account, including after a switch",
   assert.deepEqual(selectRefreshAccounts(accounts, "current").map(a => a.id), ["old"]);
   const switched = accounts.map(a => ({ ...a, is_active: a.id === "new" }));
   assert.deepEqual(selectRefreshAccounts(switched, "current").map(a => a.id), ["new"]);
-  assert.deepEqual(selectRefreshAccounts(accounts, "all"), accounts);
+  assert.deepEqual(selectRefreshAccounts(accounts, "category"), accounts);
   assert.deepEqual(selectRefreshAccounts(accounts.map(a => ({ ...a, is_active: false })), "current"), []);
 });
 test("background intervals are longer and corrupted preferences cannot create a tight loop", () => {
@@ -15,4 +15,18 @@ test("background intervals are longer and corrupted preferences cannot create a 
   assert.equal(refreshDelay(60, false), 300_000);
   assert.equal(refreshDelay(300, false), 1_500_000);
   for (const value of [0, -1, NaN, Infinity, 123]) assert.equal(refreshDelay(value, true), 60_000);
+});
+
+test("category refresh filters plans and never refreshes invalid credentials, even active ones", () => {
+  const accounts = [
+    { id: "active-invalid", is_active: true, credentials_invalid: true, plan_type: "team" },
+    { id: "team", is_active: false, plan_type: " TEAM " },
+    { id: "plus", is_active: false, plan_type: "plus" },
+    { id: "invalid-team", is_active: false, credentials_invalid: true, plan_type: "team" },
+    { id: "api", is_active: false, auth_mode: "api_key", plan_type: "team" },
+  ];
+  assert.deepEqual(selectRefreshAccounts(accounts, "current"), []);
+  assert.deepEqual(selectRefreshAccounts(accounts, "category", "team").map(a => a.id), ["team"]);
+  assert.deepEqual(selectRefreshAccounts(accounts, "category", "api_key").map(a => a.id), ["api"]);
+  assert.deepEqual(selectRefreshAccounts(accounts, "category", "all").map(a => a.id), ["team", "plus", "api"]);
 });

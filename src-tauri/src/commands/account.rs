@@ -104,11 +104,14 @@ async fn switch_account_with_policy(
         .map_err(|e| e.to_string())?;
     let store = load_accounts().map_err(|e| e.to_string())?;
 
-    store
+    let target = store
         .accounts
         .iter()
         .find(|account| account.id == account_id)
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
+    if target.credentials_invalid {
+        return Err("Account credentials invalid; sign in again".into());
+    }
 
     if !restart && store.active_account_id.as_deref() == Some(account_id) {
         return Ok(());

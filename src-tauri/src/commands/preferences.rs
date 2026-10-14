@@ -11,6 +11,12 @@ pub struct RuntimePreferences {
     pub automatic_update_checks: bool,
     pub refresh_scope: RefreshScope,
     pub refresh_interval_seconds: u64,
+    #[serde(default = "default_plan_tab")]
+    pub selected_plan_tab: String,
+}
+
+fn default_plan_tab() -> String {
+    "all".into()
 }
 
 impl RuntimePreferences {
@@ -22,11 +28,21 @@ impl RuntimePreferences {
             automatic_update_checks: settings.automatic_update_checks,
             refresh_scope: settings.refresh_scope,
             refresh_interval_seconds,
+            selected_plan_tab: settings.selected_plan_tab,
         }
     }
     pub fn validate(&self) -> Result<(), String> {
         if ![30, 60, 120, 300, 600].contains(&self.refresh_interval_seconds) {
             return Err("Unsupported refresh interval".into());
+        }
+        if self.selected_plan_tab.is_empty()
+            || self.selected_plan_tab.len() > 80
+            || !self
+                .selected_plan_tab
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
+        {
+            return Err("Invalid account category".into());
         }
         Ok(())
     }
@@ -80,6 +96,8 @@ pub fn set_runtime_preferences(
         return Err(error);
     }
     let actual = get_runtime_preferences(app.clone())?;
+    #[cfg(desktop)]
+    crate::tray::refresh_menu(&app);
     app.emit("app-settings-changed", ())
         .map_err(|e| e.to_string())?;
     Ok(actual)
@@ -91,6 +109,7 @@ pub fn save_runtime_preferences(preferences: &RuntimePreferences) -> Result<(), 
         settings.startup_minimized = preferences.startup_minimized;
         settings.automatic_update_checks = preferences.automatic_update_checks;
         settings.refresh_scope = preferences.refresh_scope;
+        settings.selected_plan_tab = preferences.selected_plan_tab.clone();
         settings.refresh_interval_seconds = preferences.refresh_interval_seconds;
         if preferences.autostart_enabled.is_some() {
             settings.autostart_initialized = true;
@@ -130,16 +149,38 @@ pub fn initialize_startup<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> 
 mod tests {
     use super::*;
     #[test]
-    fn old_settings_default_to_current_and_preserve_explicit_choices() {
+    fn old_settings_default_to_category_and_preserve_explicit_choices() {
         let old: AppSettings = serde_json::from_str(r#"{"ui_language":"en-US"}"#).unwrap();
-        assert_eq!(old.refresh_scope, RefreshScope::Current);
+        assert_eq!(old.refresh_scope, RefreshScope::Category);
+        let explicit: AppSettings = serde_json::from_str(r#"{"refresh_scope":"current"}"#).unwrap();
+        assert_eq!(explicit.refresh_scope, RefreshScope::Current);
         assert!(old.startup_minimized && old.automatic_update_checks);
         let stored: AppSettings = serde_json::from_str(r#"{"startup_minimized":false,"automatic_update_checks":false,"refresh_scope":"all","refresh_interval_seconds":300,"autostart_initialized":true}"#).unwrap();
         assert!(!stored.startup_minimized && !stored.automatic_update_checks);
         assert!(stored.autostart_initialized);
-        assert_eq!(stored.refresh_scope, RefreshScope::All);
+        assert_eq!(stored.refresh_scope, RefreshScope::Category);
         assert_eq!(stored.refresh_interval_seconds, 300);
     }
+    #[test]
+    fn category_and_current_scopes_always_skip_invalid_accounts() {
+        let mut settings = AppSettings::default();
+        settings.selected_plan_tab = "team".into();
+        let mut account = crate::types::StoredAccount::new_api_key("API".into(), "key".into());
+        settings.refresh_scope = RefreshScope::Category;
+        assert!(!settings.should_refresh(&account, Some(&account.id)));
+        settings.selected_plan_tab = "api_key".into();
+        assert!(settings.should_refresh(&account, None));
+        account.credentials_invalid = true;
+        assert!(!settings.should_refresh(&account, Some(&account.id)));
+        settings.refresh_scope = RefreshScope::Current;
+        assert!(!settings.should_refresh(&account, Some(&account.id)));
+        let stored: AppSettings =
+            serde_json::from_str(r#"{"selected_plan_tab":"team","refresh_scope":"category"}"#)
+                .unwrap();
+        assert_eq!(stored.selected_plan_tab, "team");
+        assert_eq!(stored.refresh_scope, RefreshScope::Category);
+    }
+
     #[test]
     fn rejects_zero_and_unbounded_poll_intervals() {
         let mut preferences = RuntimePreferences::from_settings(AppSettings::default(), None);

@@ -245,7 +245,7 @@ function TrayMenu() {
       setError(null);
       if (refresh) {
         const preferences = await invokeBackend<RuntimePreferences>("get_runtime_preferences");
-        void loadUsage(selectRefreshAccounts(list, preferences.refresh_scope));
+        void loadUsage(selectRefreshAccounts(list, preferences.refresh_scope, preferences.selected_plan_tab));
         void loadActiveStats(list);
       }
     } catch (err) {

@@ -80,6 +80,9 @@ pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo,
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
 
+    if account.credentials_invalid {
+        return Err("Account credentials invalid; sign in again".into());
+    }
     let recently_refreshed = METADATA_REFRESH_TIMES
         .lock()
         .map_err(|_| "Metadata cache unavailable")?
@@ -97,9 +100,14 @@ pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo,
             let refreshed = ensure_chatgpt_tokens_fresh(&account)
                 .await
                 .map_err(|e| e.to_string())?;
-            let live_metadata = fetch_chatgpt_account_metadata(&refreshed)
-                .await
-                .map_err(|e| e.to_string())?;
+            let live_metadata = match fetch_chatgpt_account_metadata(&refreshed).await {
+                Ok(metadata) => metadata,
+                Err(error) => {
+                    crate::auth::storage::mark_credentials_invalid(&refreshed, &error.to_string())
+                        .map_err(|e| e.to_string())?;
+                    return Err(error.to_string());
+                }
+            };
 
             update_account_metadata(
                 &account_id,

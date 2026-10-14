@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { getAccountPlanKey, groupAccountsByPlan } from "../src/lib/accountGroups.ts";
+import { getAccountPlanKey, groupAccountsByPlan, selectAccountPanel } from "../src/lib/accountGroups.ts";
 import type { AccountInfo } from "../src/types";
 
 test("plan grouping omits the pinned account and empty groups while preserving sort order", () => {
@@ -32,4 +32,31 @@ test("dynamic tabs include types held only by the current account and normalize 
   assert.deepEqual(groupAccountsByPlan(accounts, true).map(tab => tab.key), ["plus", "pro", "api_key"]);
   assert.deepEqual(accounts.filter(account => getAccountPlanKey(account) === "pro").map(account => account.id), ["current"]);
   assert.deepEqual(groupAccountsByPlan(accounts.slice(1), true).map(tab => tab.key), ["plus", "api_key"]);
+});
+
+test("invalid accounts finish each type group, including invalid active accounts", () => {
+  const accounts = [
+    {id: "invalid-active", plan_type: "team", is_active: true, credentials_invalid: true},
+    {id: "plus-invalid", plan_type: "plus", is_active: false, credentials_invalid: true},
+    {id: "team-valid", plan_type: "team", is_active: false},
+    {id: "plus-valid", plan_type: "plus", is_active: false},
+  ].map(a => ({...a, auth_mode: "chat_g_p_t"})) as AccountInfo[];
+  assert.deepEqual(groupAccountsByPlan(accounts, true).map(g => g.accounts.map(a => a.id)),
+    [["plus-valid", "plus-invalid"], ["team-valid", "invalid-active"]]);
+});
+
+test("current account remains pinned in every category and never repeats in the groups", () => {
+  const accounts = [
+    {id: "free", plan_type: "free", is_active: false},
+    {id: "current", plan_type: "team", is_active: true, credentials_invalid: true},
+    {id: "plus", plan_type: "plus", is_active: false},
+    {id: "team", plan_type: "team", is_active: false},
+  ].map(a => ({...a, auth_mode: "chat_g_p_t"})) as AccountInfo[];
+  for (const tab of ["all", "free", "plus", "team", "unknown"]) {
+    const panel = selectAccountPanel(accounts, tab);
+    assert.equal(panel.currentAccount?.id, "current");
+    assert.ok(!panel.otherAccounts.some(account => account.id === "current"));
+    if (tab !== "all") assert.ok(panel.otherAccounts.every(account => getAccountPlanKey(account) === tab));
+  }
+  assert.equal(selectAccountPanel(accounts.filter(a => !a.is_active), "team").currentAccount, undefined);
 });

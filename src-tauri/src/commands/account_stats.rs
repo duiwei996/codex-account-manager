@@ -192,6 +192,12 @@ pub async fn get_account_usage_stats(account_id: String) -> Result<AccountUsageS
         .find(|account| account.id == account_id)
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
 
+    if account.credentials_invalid {
+        return Ok(unavailable_stats(
+            account_id,
+            "Account credentials invalid; sign in again",
+        ));
+    }
     if account.auth_mode != AuthMode::ChatGPT {
         return Ok(unavailable_stats(
             account_id,
@@ -232,6 +238,9 @@ async fn parse_profile_usage_with_reset_credits(
     account: &StoredAccount,
     response: reqwest::Response,
 ) -> anyhow::Result<AccountUsageStats> {
+    if response.status() == StatusCode::UNAUTHORIZED {
+        crate::auth::storage::mark_credentials_invalid(account, "401 Unauthorized")?;
+    }
     let mut stats = parse_profile_usage_response(&account.id, response).await?;
 
     if stats.available {

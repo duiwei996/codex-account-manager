@@ -104,7 +104,16 @@ async fn refresh_chatgpt_tokens_locked(account: &StoredAccount) -> Result<Stored
         anyhow::bail!("Missing refresh token for account {}", current.name);
     }
 
-    let refreshed = refresh_tokens_with_refresh_token(&current_refresh_token).await?;
+    if current.credentials_invalid {
+        anyhow::bail!("Account credentials invalid; sign in again");
+    }
+    let refreshed = match refresh_tokens_with_refresh_token(&current_refresh_token).await {
+        Ok(value) => value,
+        Err(error) => {
+            super::storage::mark_credentials_invalid(&current, &error.to_string())?;
+            return Err(error);
+        }
+    };
     let next = merge_refresh_response(
         current_id_token,
         current_refresh_token,
@@ -275,7 +284,30 @@ async fn refresh_tokens_with_refresh_token(refresh_token: &str) -> Result<Refres
 
     if !response.status().is_success() {
         let status = response.status();
-        anyhow::bail!("Token refresh failed: {status}");
+        let code = response
+            .json::<serde_json::Value>()
+            .await
+            .ok()
+            .and_then(|v| {
+                v.get("error")
+                    .and_then(|e| {
+                        e.as_str()
+                            .or_else(|| e.get("code").and_then(|c| c.as_str()))
+                    })
+                    .map(str::to_owned)
+            })
+            .filter(|code| {
+                [
+                    "invalid_grant",
+                    "refresh_token_reused",
+                    "refresh_token_expired",
+                    "refresh_token_invalidated",
+                    "account_deactivated",
+                ]
+                .contains(&code.as_str())
+            })
+            .unwrap_or_default();
+        anyhow::bail!("Token refresh failed: {status} {code}");
     }
 
     crate::api::http::json(response)
