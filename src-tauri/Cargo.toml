@@ -1,6 +1,6 @@
 [package]
 name = "codex-switcher"
-version = "1.0.8"
+version = "1.0.9"
 description = "A multi-account manager for Codex CLI"
 authors = ["duiwei"]
 license = "MIT"
