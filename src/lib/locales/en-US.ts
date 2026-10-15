@@ -318,4 +318,8 @@ export default {
   "Restart Codex": "Restart",
   "Restarting Codex...": "Restarting…",
   "Reapply this account and restart Codex": "Reapply this account and restart Codex",
+  "Disable auto warm-up for the selected category and account in use": "Disable auto warm-up for the selected category and account in use",
+  "Enable auto warm-up for the selected category and account in use": "Enable auto warm-up for the selected category and account in use",
+  "Including the account in use; invalid accounts skipped": "Including the account in use; invalid accounts skipped",
+  "Refresh the account in use, or the selected category plus the account in use. Invalid accounts are skipped.": "Refresh the account in use, or the selected category plus the account in use. Invalid accounts are skipped.",
 } as Record<string, string>;
