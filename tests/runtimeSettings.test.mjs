@@ -21,6 +21,8 @@ let saved = { ...defaults };
 const account = (id, active = false) => ({ id, name: id, email: null, plan_type: null, auth_mode: "api_key", is_active: active, created_at: "2026-01-01T00:00:00Z", last_used_at: null });
 let accounts = [account("first", true), account("second")];
 let failUsage = false;
+let customUsage = null;
+let exportDocuments = [];
 window.__TAURI_INTERNALS__ = {
   metadata: { currentWindow: { label: "main" } },
   transformCallback: callback => { callbacks.set(++callbackId, callback); return callbackId; },
@@ -30,16 +32,18 @@ window.__TAURI_INTERNALS__ = {
       case "plugin:event|listen": subscriptions.set(args.handler, args); return args.handler;
       case "get_runtime_preferences": return { ...saved };
       case "set_runtime_preferences": saved = { ...args.preferences }; return { ...saved };
-      case "get_display_settings": return { account_switch_mode: "direct", tray_display_mode: "active_usage_text", dock_display_mode: null };
+      case "get_display_settings": return { account_switch_mode: "direct", dock_display_mode: null };
       case "list_accounts": return accounts.map(a => ({ ...a }));
-      case "get_usage": if (failUsage) throw new Error("401 Unauthorized"); return { account_id: args.accountId, primary_used_percent: 25, secondary_used_percent: 50, error: null };
+      case "get_usage": if (failUsage) throw new Error("401 Unauthorized"); if (customUsage) return customUsage(args.accountId); return { account_id: args.accountId, primary_used_percent: 25, secondary_used_percent: 50, error: null };
       case "warmup_account": await new Promise(resolve => setTimeout(resolve, 20)); return null;
       case "get_account_usage_stats": throw new Error("401 Unauthorized");
       case "refresh_account_metadata": return accounts.find(a => a.id === args.accountId);
       case "switch_account": accounts = accounts.map(a => ({ ...a, is_active: a.id === args.accountId })); return null;
       case "rename_account": accounts = accounts.map(a => a.id === args.accountId ? { ...a, name: args.newName } : a); return null;
       case "complete_login": { const added = account("added"); accounts.push(added); return added; }
-      case "export_accounts_json": return [];
+      case "export_accounts_json": return exportDocuments;
+      case "plugin:dialog|save": return 'C:\\synthetic-export.json';
+      case "save_accounts_json": return 1;
       case "get_masked_account_ids": return [];
       case "get_dock_display_mode": return null;
       case "check_codex_processes": return { can_switch: true, count: 0, background_count: 0, pids: [] };
@@ -78,6 +82,7 @@ test("settings tabs expose switches and persist disabled startup and update choi
   await act(async () => root.render(createElement(SettingsHarness)));
   await settle();
   assert.equal(document.querySelectorAll('[role="tab"]').length, 3);
+  assert.equal(document.querySelector('#tray-display-mode'), null);
   assert.equal(document.querySelector('#app-autostart').getAttribute('aria-checked'), 'true');
   await click('#app-autostart');
   assert.equal(saved.autostart_enabled, false);
@@ -109,6 +114,45 @@ test("one transfer dialog switches import and export without importing or refres
   await click('#transfer-import-tab');
   assert.equal(document.querySelector('#transfer-import-tab').getAttribute('aria-selected'), 'true');
   assert.ok(!calls.some(call => call.command === 'get_usage' || call.command.startsWith('import_accounts')));
+});
+
+test("export filters put all first, default to valid, and send both filters for preview", async () => {
+  await act(async () => root.render(null));
+  calls.length = 0;
+  exportDocuments = [{account_id: '', name: 'accounts.json', content: '[{"synthetic":true}]'}];
+  const list = [
+    {...account("active", true), auth_mode: "chat_g_p_t", plan_type: "plus"},
+    {...account("team"), auth_mode: "chat_g_p_t", plan_type: "team"},
+  ];
+  await act(async () => root.render(createElement(AccountTransferModal, { open: true, mode: "export", accountId: null, accounts: list, onClose() {}, onImported() {} })));
+  await settle();
+  assert.equal(document.querySelector('#export-category option').value, 'all');
+  assert.equal(document.querySelector('#export-status option').value, 'all');
+  assert.equal(document.querySelector('#export-category').value, 'all');
+  assert.equal(document.querySelector('#export-status').value, 'valid');
+  assert.deepEqual(calls.filter(c => c.command === 'export_accounts_json').at(-1).args,
+    {format: 'all', accountId: null, category: 'all', accountStatus: 'valid'});
+  for (const [selector, value] of [['#export-category', 'team'], ['#export-status', 'invalid']]) {
+    await act(async () => {
+      const select = document.querySelector(selector);
+      select.value = value;
+      select.dispatchEvent(new window.Event('change', {bubbles: true}));
+    });
+    await settle();
+  }
+  assert.deepEqual(calls.filter(c => c.command === 'export_accounts_json').at(-1).args,
+    {format: 'all', accountId: null, category: 'team', accountStatus: 'invalid'});
+  await act(async () => [...document.querySelectorAll('button')].find(button => button.textContent === '下载').click());
+  await settle();
+  assert.deepEqual(calls.filter(c => c.command === 'save_accounts_json').at(-1).args,
+    {format: 'all', accountId: null, path: 'C:\\synthetic-export.json', category: 'team', accountStatus: 'invalid'});
+  await act(async () => root.render(null));
+  await act(async () => root.render(createElement(AccountTransferModal, { open: true, mode: "export", accountId: 'active', accounts: list, onClose() {}, onImported() {} })));
+  await settle();
+  assert.equal(document.querySelector('#export-category'), null);
+  assert.deepEqual(calls.filter(c => c.command === 'export_accounts_json').at(-1).args,
+    {format: 'official', accountId: 'active', category: 'all', accountStatus: 'all'});
+  exportDocuments = [];
 });
 
 test("automatic current refresh follows switching, rename makes no usage requests, and login only refreshes the added account", async () => {
@@ -307,4 +351,60 @@ test("category refresh excludes invalid accounts on first load and follows tab c
   await act(async () => root.render(createElement(Harness, {tab: "plus"})));
   await settle();
   assert.deepEqual(calls.filter(c => c.command === "get_usage").map(c => c.args.accountId), ["plus"]);
+});
+
+
+test("main page refresh and both warmups include the active account and exclude other categories and invalid accounts", async () => {
+  await act(async () => root.render(null));
+  const { default: App } = await server.ssrLoadModule("/src/App.tsx");
+  const fixture = () => [
+    {...account("active-plus", true), auth_mode: "chat_g_p_t", plan_type: "plus"},
+    {...account("team"), auth_mode: "chat_g_p_t", plan_type: "team"},
+    {...account("other-free"), auth_mode: "chat_g_p_t", plan_type: "free"},
+    {...account("invalid-team"), auth_mode: "chat_g_p_t", plan_type: "team", credentials_invalid: true},
+  ];
+  const ids = command => [...new Set(calls.filter(c => c.command === command).map(c => c.args.accountId))].sort();
+  const prepare = async mode => {
+    await act(async () => root.render(null));
+    localStorage.clear();
+    failUsage = false;
+    accounts = fixture();
+    saved = {...defaults, refresh_scope: 'current', selected_plan_tab: 'team'};
+    const now = new Date();
+    localStorage.setItem('codex-switcher-auto-warmup-all', String(mode === 'auto'));
+    localStorage.setItem('codex-switcher-timed-warmup-enabled', String(mode === 'timed'));
+    localStorage.setItem('codex-switcher-timed-warmup-times', JSON.stringify([`${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`]));
+    customUsage = id => ({account_id: id, primary_used_percent: 0, primary_window_minutes: 300,
+      primary_resets_at: Math.floor(Date.now() / 1000) + 18000, secondary_used_percent: 20, error: null});
+    calls.length = 0;
+    await act(async () => root.render(createElement(App)));
+    await settle();
+    await settle();
+  };
+  try {
+    await prepare('off');
+    calls.length = 0;
+    await click('button[aria-label="刷新用量: team"]');
+    assert.deepEqual(ids('get_usage'), ['active-plus', 'team']);
+    assert.deepEqual(ids('refresh_account_metadata'), ['active-plus', 'team']);
+    calls.length = 0;
+    await click('#account-tab-free');
+    calls.length = 0;
+    await click('button[aria-label="刷新用量: 免费账号"]');
+    assert.deepEqual(ids('get_usage'), ['active-plus', 'other-free']);
+    await prepare('auto');
+    assert.deepEqual(ids('warmup_account'), ['active-plus', 'team']);
+    assert.ok(!calls.some(c => c.command === 'get_usage' && ['other-free', 'invalid-team'].includes(c.args.accountId)));
+    calls.length = 0;
+    await click('#account-tab-free');
+    await settle();
+    assert.deepEqual(ids('warmup_account'), ['other-free']);
+    await prepare('timed');
+    assert.deepEqual(ids('warmup_account'), ['active-plus', 'team']);
+    assert.ok(!calls.some(c => c.command === 'get_usage' && ['other-free', 'invalid-team'].includes(c.args.accountId)));
+  } finally {
+    await act(async () => root.render(null));
+    customUsage = null;
+    localStorage.clear();
+  }
 });

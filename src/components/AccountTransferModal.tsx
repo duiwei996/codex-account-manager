@@ -1,20 +1,27 @@
 import { CenteredSelect } from "./CenteredSelect";
+import { groupAccountsByPlan } from "../lib/accountGroups";
 import { localizeError } from "../lib/errors";
 import { useEffect, useState } from "react";
 import { useLocale } from "../lib/i18n";
 import { invokeBackend } from "../lib/platform";
 import { maskAccountJson, type ExportDocument, type ExportFormat } from "../lib/accountTransfer";
-import type { ImportAccountsSummary } from "../types";
-interface Props { open: boolean; mode: "export" | "import"; accountId: string | null; onClose: () => void; onImported: (summary: ImportAccountsSummary) => Promise<void> }
+import type { AccountInfo, ImportAccountsSummary } from "../types";
+interface Props { open: boolean; mode: "export" | "import"; accountId: string | null; accounts?: AccountInfo[]; onClose: () => void; onImported: (summary: ImportAccountsSummary) => Promise<void> }
 export function AccountTransferModal(props: Props) {
   return <AccountTransferForm key={`${props.open}:${props.mode}:${props.accountId ?? "all"}`} {...props} />;
 }
 
-function AccountTransferForm({open: visible,mode: initialMode,accountId,onClose,onImported}: Props) {
+function AccountTransferForm({open: visible,mode: initialMode,accountId,accounts = [],onClose,onImported}: Props) {
   const [mode, setMode] = useState(initialMode);
   const locale = useLocale();
   const label = (zh: string,en: string) => locale === "zh-CN" ? zh : en;
   const [format,setFormat] = useState<ExportFormat>(accountId ? "official" : "all");
+  const [category, setCategory] = useState("all");
+  const [accountStatus, setAccountStatus] = useState("valid");
+  const filters = { category: accountId ? "all" : category, accountStatus: accountId ? "all" : accountStatus };
+  const categories = groupAccountsByPlan(accounts, true);
+  const categoryLabel = (key: string) => key === "api_key" ? label("API Key 账号", "API key accounts") :
+    key === "unknown" ? label("未知套餐", "Unknown plan") : key === "free" ? label("免费账号", "Free accounts") : key;
   const [documents,setDocuments] = useState<ExportDocument[]>([]);
   const [reveal,setReveal] = useState(false);
   const [payload,setPayload] = useState("");
@@ -26,12 +33,12 @@ function AccountTransferForm({open: visible,mode: initialMode,accountId,onClose,
     setDocuments([]);setPayload("");setReveal(false);setError("");setNotice("");
     if (!visible || mode !== "export") {setBusy(false);return;}
     setBusy(true);
-    invokeBackend<ExportDocument[]>("export_accounts_json",{format,accountId: format === "all" ? null : accountId})
+    invokeBackend<ExportDocument[]>("export_accounts_json",{format,accountId: format === "all" ? null : accountId, ...filters})
       .then(value => {if(active)setDocuments(value);})
       .catch(error => {if(active)setError(String(error));})
       .finally(() => {if(active)setBusy(false);});
     return () => {active=false;};
-  },[visible,mode,accountId,format]);
+  },[visible,mode,accountId,format,category,accountStatus]);
   if(!visible)return null;
   async function download(document?: ExportDocument) {
     setError("");setNotice("");
@@ -43,7 +50,7 @@ function AccountTransferForm({open: visible,mode: initialMode,accountId,onClose,
         : await open({title:label("选择导出文件夹","Choose export folder"),directory:true,multiple:false});
       if(!selected || Array.isArray(selected))return;
       setBusy(true);
-      const count = await invokeBackend<number>("save_accounts_json",{format,accountId:id,path:selected});
+      const count = await invokeBackend<number>("save_accounts_json",{format,accountId:id,path:selected, ...filters});
       setNotice(label(`已导出 ${count} 个账号`, `Exported ${count} accounts`));
     }catch(error){setError(String(error));}finally{setBusy(false);}
   }
@@ -86,17 +93,32 @@ function AccountTransferForm({open: visible,mode: initialMode,accountId,onClose,
         </div>}
         <div id="transfer-panel" role={accountId ? undefined : "tabpanel"} aria-labelledby={accountId ? undefined : `transfer-${mode}-tab`} className="space-y-4">
         {mode === "export" ? <>
+          {!accountId && <div className="flex flex-wrap gap-4">
+            <label className="flex items-center gap-3 text-sm font-medium" htmlFor="export-category">{label("分类", "Category")}
+              <CenteredSelect id="export-category" className={button} value={category} disabled={busy} onChange={event => setCategory(event.target.value)}>
+                <option value="all">{label("全部账号", "All accounts")}</option>
+                {categories.map(group => <option key={group.key} value={group.key}>{categoryLabel(group.key)}</option>)}
+              </CenteredSelect>
+            </label>
+            <label className="flex items-center gap-3 text-sm font-medium" htmlFor="export-status">{label("账号状态", "Account status")}
+              <CenteredSelect id="export-status" className={button} value={accountStatus} disabled={busy} onChange={event => setAccountStatus(event.target.value)}>
+                <option value="all">{label("全部状态", "All statuses")}</option>
+                <option value="valid">{label("有效账号", "Valid accounts")}</option>
+                <option value="invalid">{label("失效账号", "Invalid accounts")}</option>
+              </CenteredSelect>
+            </label>
+          </div>}
           <label className="flex items-center gap-4 text-sm font-medium">{label("导出格式","Export format")}
             <CenteredSelect className={button} value={format} disabled={busy} onChange={event=>setFormat(event.target.value as ExportFormat)}>
-              {!accountId && <option value="all">{label("全部账号","All accounts")}</option>}
+              {!accountId && <option value="all">{label("合并 JSON","Combined JSON")}</option>}
               <option value="official">{label("官方 auth.json","Official auth.json")}</option><option value="cpa">{label("CPA 格式","CPA format")}</option>
             </CenteredSelect>
           </label>
-          {format === "all" && <p className="text-sm text-gray-500">{label("将全部账号合并为一个 JSON，每个账号采用 auth.json 格式，可批量导入。","Export every account as one JSON array of auth.json objects, ready for batch import.")}</p>}
+          {format === "all" && <p className="text-sm text-gray-500">{label("将符合分类和状态筛选的账号合并为一个 JSON，每个账号采用 auth.json 格式，可批量导入。","Export matching accounts as one JSON array of auth.json objects, ready for batch import.")}</p>}
           <div className="flex flex-wrap gap-3">
             <button className={button} disabled={busy||!documents.length} onClick={()=>setReveal(!reveal)}>{reveal?label("隐藏凭据","Hide credentials"):label("预览完整内容","Preview full content")}</button>
             {(accountId || format === "all")&&<button className={button} disabled={busy||!documents.length} onClick={()=>void copy()}>{label("复制","Copy")}</button>}
-            <button className={`${button} bg-blue-600 text-white`} disabled={busy||!documents.length} onClick={()=>void download()}>{accountId || format === "all"?label("下载","Download"):label("一键下载全部","Download all")}</button>
+            <button className={`${button} bg-blue-600 text-white`} disabled={busy||!documents.length} onClick={()=>void download()}>{accountId || format === "all"?label("下载","Download"):label("下载筛选结果","Download matching accounts")}</button>
           </div>
           <p className="text-xs text-gray-500">{label("导出文件和复制内容包含完整登录凭据，请妥善保管。","Exported files and copied JSON contain full credentials. Keep them private.")}</p>
           {documents.map((document,index)=><section key={document.account_id} className="space-y-3 rounded-xl border border-gray-200 p-4 dark:border-gray-700">

@@ -60,24 +60,53 @@ fn export_value(account: &StoredAccount, format: &str) -> Result<Value> {
     }
 }
 
-fn export_documents(format: &str, account_id: Option<&str>) -> Result<Vec<ExportDocument>> {
+fn export_documents(
+    format: &str,
+    account_id: Option<&str>,
+    category: Option<&str>,
+    account_status: Option<&str>,
+) -> Result<Vec<ExportDocument>> {
     let store = load_accounts()?;
-    documents_for_accounts(&store.accounts, format, account_id)
+    documents_for_accounts(
+        &store.accounts,
+        format,
+        account_id,
+        category.unwrap_or("all"),
+        account_status.unwrap_or(if account_id.is_some() { "all" } else { "valid" }),
+    )
 }
 
 fn documents_for_accounts(
     accounts: &[StoredAccount],
     format: &str,
     account_id: Option<&str>,
+    category: &str,
+    account_status: &str,
 ) -> Result<Vec<ExportDocument>> {
+    if !matches!(account_status, "all" | "valid" | "invalid") {
+        bail!("不支持的账号状态筛选");
+    }
+    let settings = crate::types::AppSettings {
+        selected_plan_tab: category.into(),
+        ..Default::default()
+    };
+    let matches_filters = |account: &StoredAccount| {
+        settings.includes_category(account)
+            && match account_status {
+                "valid" => !account.credentials_invalid,
+                "invalid" => account.credentials_invalid,
+                _ => true,
+            }
+    };
     if format == "all" {
-        if accounts.is_empty() {
-            bail!("没有可导出的账号");
-        }
         let values = accounts
             .iter()
+            .filter(|account| matches_filters(account))
             .map(|account| export_value(account, "official"))
             .collect::<Result<Vec<_>>>()?;
+        if values.is_empty() {
+            bail!("没有符合筛选条件的账号");
+        }
         let content = serde_json::to_string_pretty(&values)?;
         if content.len() > MAX_JSON_BYTES {
             bail!("批量导出总大小超过 8 MiB 限制，请分批导出");
@@ -126,6 +155,7 @@ fn documents_for_accounts(
     let selected: Vec<_> = named
         .into_iter()
         .filter(|(account, _)| account_id.is_none_or(|id| account.id == id))
+        .filter(|(account, _)| matches_filters(account))
         .collect();
     if selected.is_empty() {
         bail!("没有可导出的账号");
@@ -146,8 +176,16 @@ fn documents_for_accounts(
 pub async fn export_accounts_json(
     format: String,
     account_id: Option<String>,
+    category: Option<String>,
+    account_status: Option<String>,
 ) -> Result<Vec<ExportDocument>, String> {
-    export_documents(&format, account_id.as_deref()).map_err(|error| error.to_string())
+    export_documents(
+        &format,
+        account_id.as_deref(),
+        category.as_deref(),
+        account_status.as_deref(),
+    )
+    .map_err(|error| error.to_string())
 }
 
 #[tauri::command]
@@ -155,9 +193,16 @@ pub async fn save_accounts_json(
     format: String,
     account_id: Option<String>,
     path: String,
+    category: Option<String>,
+    account_status: Option<String>,
 ) -> Result<usize, String> {
-    let documents =
-        export_documents(&format, account_id.as_deref()).map_err(|error| error.to_string())?;
+    let documents = export_documents(
+        &format,
+        account_id.as_deref(),
+        category.as_deref(),
+        account_status.as_deref(),
+    )
+    .map_err(|error| error.to_string())?;
     let destination = Path::new(&path);
     let single_file = account_id.is_some() || format == "all";
     if !single_file && !destination.is_dir() {
@@ -319,6 +364,68 @@ pub async fn import_accounts_json_files(
 mod tests {
     use super::*;
     #[test]
+    fn export_filters_intersect_category_and_status_for_every_format() {
+        let valid = account();
+        let mut invalid = account();
+        invalid.credentials_invalid = true;
+        let mut plus = account();
+        plus.plan_type = Some("plus".into());
+        let accounts = vec![valid.clone(), invalid.clone(), plus];
+        for format in ["all", "official", "cpa"] {
+            for (status, id) in [("valid", &valid.id), ("invalid", &invalid.id)] {
+                let docs = documents_for_accounts(&accounts, format, None, "team", status).unwrap();
+                assert_eq!(docs.len(), 1);
+                if format == "all" {
+                    let values: Vec<Value> = serde_json::from_str(&docs[0].content).unwrap();
+                    assert_eq!(values.len(), 1);
+                    assert_eq!(
+                        values[0],
+                        export_value(
+                            if status == "valid" { &valid } else { &invalid },
+                            "official"
+                        )
+                        .unwrap()
+                    );
+                } else {
+                    assert_eq!(&docs[0].account_id, id);
+                }
+            }
+            let docs = documents_for_accounts(&accounts, format, None, "team", "all").unwrap();
+            if format == "all" {
+                assert_eq!(
+                    serde_json::from_str::<Vec<Value>>(&docs[0].content)
+                        .unwrap()
+                        .len(),
+                    2
+                );
+            } else {
+                assert_eq!(docs.len(), 2);
+                let single =
+                    documents_for_accounts(&accounts, format, Some(&invalid.id), "team", "invalid")
+                        .unwrap();
+                assert_eq!(single[0].name, docs[1].name);
+            }
+            assert!(documents_for_accounts(&accounts, format, None, "free", "valid").is_err());
+            if format != "all" {
+                assert!(documents_for_accounts(
+                    &accounts,
+                    format,
+                    Some(&valid.id),
+                    "team",
+                    "invalid"
+                )
+                .is_err());
+            }
+        }
+        assert_eq!(
+            documents_for_accounts(&accounts, "official", None, "all", "valid")
+                .unwrap()
+                .len(),
+            2
+        );
+        assert!(documents_for_accounts(&accounts, "all", None, "all", "typo").is_err());
+    }
+    #[test]
     fn names_match_for_single_and_batch_and_collisions_never_overwrite() {
         let first = account();
         let mut second = account();
@@ -327,13 +434,19 @@ mod tests {
         plus.plan_type = Some("plus".into());
         let accounts = vec![first.clone(), second, plus];
         for format in ["official", "cpa"] {
-            let batch = documents_for_accounts(&accounts, format, None).unwrap();
+            let batch = documents_for_accounts(&accounts, format, None, "all", "all").unwrap();
             assert_eq!(batch[0].name, "test@example.com_team.json");
             assert_eq!(batch[1].name, "TEST@example.com_team_2.json");
             assert_eq!(batch[2].name, "test@example.com_plus.json");
             for document in batch {
-                let single =
-                    documents_for_accounts(&accounts, format, Some(&document.account_id)).unwrap();
+                let single = documents_for_accounts(
+                    &accounts,
+                    format,
+                    Some(&document.account_id),
+                    "all",
+                    "all",
+                )
+                .unwrap();
                 assert_eq!(single[0].name, document.name);
                 assert_eq!(single[0].content, document.content);
             }
@@ -346,7 +459,8 @@ mod tests {
             account(),
             StoredAccount::new_api_key("API key".into(), "synthetic-api-key".into()),
         ];
-        let documents = documents_for_accounts(&accounts, "all", Some(&accounts[0].id)).unwrap();
+        let documents =
+            documents_for_accounts(&accounts, "all", Some(&accounts[0].id), "all", "all").unwrap();
         assert_eq!(documents.len(), 1);
         assert_eq!(documents[0].name, "all-accounts.json");
         let values: Vec<Value> = serde_json::from_str(&documents[0].content).unwrap();
@@ -361,7 +475,7 @@ mod tests {
                 serde_json::to_value(restored.auth_data).unwrap()
             );
         }
-        assert!(documents_for_accounts(&[], "all", None).is_err());
+        assert!(documents_for_accounts(&[], "all", None, "all", "valid").is_err());
     }
     fn account() -> StoredAccount {
         StoredAccount::new_chatgpt(

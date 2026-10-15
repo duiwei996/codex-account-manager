@@ -405,8 +405,8 @@ function TrayMenu() {
           aria-pressed={autoWarmupAllEnabled}
           title={
             autoWarmupAllEnabled
-              ? t("Disable auto warm-up for all accounts")
-              : t("Enable auto warm-up for all accounts")
+              ? t("Disable auto warm-up for the selected category and account in use")
+              : t("Enable auto warm-up for the selected category and account in use")
           }
           className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-md transition-colors disabled:opacity-50 ${
             autoWarmupAllEnabled

@@ -132,14 +132,8 @@ pub fn initialize_startup<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> 
         .map_err(|e| e.to_string())?;
     }
     if std::env::args().any(|arg| arg == "--autostart") && settings.startup_minimized {
-        // A hidden tray must leave the main window visible for recovery.
-        let recoverable = settings.tray_display_mode != crate::types::TrayDisplayMode::Hidden
-            || (cfg!(target_os = "macos")
-                && settings.dock_display_mode == crate::types::DockDisplayMode::ShowInDock);
-        if recoverable {
-            if let Some(window) = app.get_webview_window("main") {
-                window.hide().map_err(|e| e.to_string())?;
-            }
+        if let Some(window) = app.get_webview_window("main") {
+            window.hide().map_err(|e| e.to_string())?;
         }
     }
     Ok(())
@@ -167,7 +161,8 @@ mod tests {
         settings.selected_plan_tab = "team".into();
         let mut account = crate::types::StoredAccount::new_api_key("API".into(), "key".into());
         settings.refresh_scope = RefreshScope::Category;
-        assert!(!settings.should_refresh(&account, Some(&account.id)));
+        assert!(settings.should_refresh(&account, Some(&account.id)));
+        assert!(!settings.should_refresh(&account, None));
         settings.selected_plan_tab = "api_key".into();
         assert!(settings.should_refresh(&account, None));
         account.credentials_invalid = true;

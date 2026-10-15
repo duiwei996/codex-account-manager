@@ -5,17 +5,12 @@ use tauri::menu::{AboutMetadata, CheckMenuItem, Menu, MenuItem, PredefinedMenuIt
 use tauri::{AppHandle, Emitter, Runtime};
 
 #[cfg(target_os = "macos")]
+use crate::auth::update_app_settings;
+#[cfg(target_os = "macos")]
 use crate::types::AppSettings;
 #[cfg(target_os = "macos")]
 pub(crate) use crate::types::DockDisplayMode;
-use crate::{auth::update_app_settings, types::TrayDisplayMode};
 
-#[cfg(target_os = "macos")]
-const TRAY_ICON_AND_SESSION_ID: &str = "tray-display-icon-and-session";
-#[cfg(target_os = "macos")]
-const TRAY_ACTIVE_USAGE_TEXT_ID: &str = "tray-display-active-usage-text";
-#[cfg(target_os = "macos")]
-const TRAY_HIDDEN_ID: &str = "tray-display-hidden";
 #[cfg(target_os = "macos")]
 const DESKTOP_REOPEN_SETTINGS_ID: &str = "desktop-reopen-settings";
 #[cfg(target_os = "macos")]
@@ -73,49 +68,10 @@ fn handle_menu_event(app: &AppHandle, event: tauri::menu::MenuEvent) {
         return;
     }
 
-    if let Some(mode) = tray_display_mode_for_item(item_id.as_ref()) {
-        update_tray_display_mode(app, mode);
-        return;
-    }
-
     #[cfg(target_os = "macos")]
     if let Some(mode) = dock_display_mode_for_item(item_id.as_ref()) {
         update_dock_display_mode(app, mode);
     }
-}
-
-#[cfg(target_os = "macos")]
-fn tray_display_mode_for_item(item_id: &str) -> Option<TrayDisplayMode> {
-    Some(match item_id {
-        TRAY_ICON_AND_SESSION_ID => TrayDisplayMode::IconAndSession,
-        TRAY_ACTIVE_USAGE_TEXT_ID => TrayDisplayMode::ActiveUsageText,
-        TRAY_HIDDEN_ID => TrayDisplayMode::Hidden,
-        _ => return None,
-    })
-}
-
-#[cfg(target_os = "macos")]
-pub(crate) fn update_tray_display_mode(app: &AppHandle, mode: TrayDisplayMode) {
-    if let Err(error) = set_tray_display_mode(app, mode) {
-        eprintln!("Failed to update tray display mode: {error}");
-    }
-}
-
-pub(crate) fn set_tray_display_mode(app: &AppHandle, mode: TrayDisplayMode) -> anyhow::Result<()> {
-    let settings = update_app_settings(|settings| {
-        settings.tray_display_mode = mode;
-        #[cfg(target_os = "macos")]
-        ensure_dock_entry_for_tray_mode(settings);
-        Ok(settings.clone())
-    })?;
-    #[cfg(target_os = "macos")]
-    apply_dock_display_mode(app, settings.dock_display_mode);
-    #[cfg(not(target_os = "macos"))]
-    let _ = settings;
-    let menu_result = refresh(app);
-    crate::tray::refresh(app);
-    menu_result?;
-    Ok(())
 }
 
 #[cfg(target_os = "macos")]
@@ -141,7 +97,6 @@ pub(crate) fn set_dock_display_mode<R: Runtime>(
 ) -> anyhow::Result<AppSettings> {
     let settings = update_app_settings(|settings| {
         settings.dock_display_mode = mode;
-        ensure_menu_bar_entry_for_dock_mode(settings);
         Ok(settings.clone())
     })?;
     apply_dock_display_mode(app, mode);
@@ -155,41 +110,8 @@ pub(crate) fn set_dock_display_mode<R: Runtime>(
 
 #[cfg(target_os = "macos")]
 fn apply_saved_dock_display_mode<R: Runtime>(app: &AppHandle<R>) {
-    let settings = match update_app_settings(|settings| {
-        ensure_menu_bar_entry_for_dock_mode(settings);
-        Ok(settings.clone())
-    }) {
-        Ok(settings) => settings,
-        Err(_) => {
-            eprintln!("Unable to read saved display settings");
-            return;
-        }
-    };
+    let settings = load_app_settings().unwrap_or_default();
     apply_dock_display_mode(app, settings.dock_display_mode);
-}
-
-#[cfg(target_os = "macos")]
-fn ensure_menu_bar_entry_for_dock_mode(settings: &mut AppSettings) -> bool {
-    if settings.dock_display_mode == DockDisplayMode::MenuBarOnly
-        && settings.tray_display_mode == TrayDisplayMode::Hidden
-    {
-        settings.tray_display_mode = TrayDisplayMode::ActiveUsageText;
-        true
-    } else {
-        false
-    }
-}
-
-#[cfg(target_os = "macos")]
-fn ensure_dock_entry_for_tray_mode(settings: &mut AppSettings) -> bool {
-    if settings.tray_display_mode == TrayDisplayMode::Hidden
-        && settings.dock_display_mode == DockDisplayMode::MenuBarOnly
-    {
-        settings.dock_display_mode = DockDisplayMode::ShowInDock;
-        true
-    } else {
-        false
-    }
 }
 
 #[cfg(target_os = "macos")]
@@ -216,38 +138,6 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>, settings: &AppSettings) -> tauri::
             .map(|publisher| vec![publisher]),
         ..Default::default()
     };
-
-    let tray_settings = Submenu::with_items(
-        app,
-        localized(zh, "Tray", "托盘"),
-        true,
-        &[
-            &CheckMenuItem::with_id(
-                app,
-                TRAY_ICON_AND_SESSION_ID,
-                localized(zh, "Icon + Session", "图标和会话"),
-                true,
-                settings.tray_display_mode == TrayDisplayMode::IconAndSession,
-                None::<&str>,
-            )?,
-            &CheckMenuItem::with_id(
-                app,
-                TRAY_ACTIVE_USAGE_TEXT_ID,
-                localized(zh, "Hourly + Weekly", "小时和每周用量"),
-                true,
-                settings.tray_display_mode == TrayDisplayMode::ActiveUsageText,
-                None::<&str>,
-            )?,
-            &CheckMenuItem::with_id(
-                app,
-                TRAY_HIDDEN_ID,
-                localized(zh, "Hidden", "隐藏"),
-                true,
-                settings.tray_display_mode == TrayDisplayMode::Hidden,
-                None::<&str>,
-            )?,
-        ],
-    )?;
 
     #[cfg(target_os = "macos")]
     let dock_settings = Submenu::with_items(
@@ -287,7 +177,7 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>, settings: &AppSettings) -> tauri::
         app,
         localized(zh, "Settings", "设置"),
         true,
-        &[&tray_settings, &dock_settings, &desktop_reopen_settings],
+        &[&dock_settings, &desktop_reopen_settings],
     )?;
 
     #[cfg(not(target_os = "macos"))]
@@ -295,7 +185,7 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>, settings: &AppSettings) -> tauri::
         app,
         localized(zh, "Settings", "设置"),
         true,
-        &[&tray_settings, &desktop_reopen_settings],
+        &[&desktop_reopen_settings],
     )?;
 
     let window_menu = Submenu::with_items(
@@ -397,36 +287,4 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>, settings: &AppSettings) -> tauri::
             &help_menu,
         ],
     )
-}
-
-#[cfg(all(test, target_os = "macos"))]
-mod tests {
-    use super::{ensure_dock_entry_for_tray_mode, ensure_menu_bar_entry_for_dock_mode};
-    use crate::types::{AppSettings, DockDisplayMode, TrayDisplayMode};
-
-    #[test]
-    fn menu_bar_only_dock_mode_keeps_a_visible_tray_entry() {
-        let mut settings = AppSettings {
-            tray_display_mode: TrayDisplayMode::Hidden,
-            dock_display_mode: DockDisplayMode::MenuBarOnly,
-            ..Default::default()
-        };
-
-        assert!(ensure_menu_bar_entry_for_dock_mode(&mut settings));
-        assert_eq!(settings.tray_display_mode, TrayDisplayMode::ActiveUsageText);
-        assert_eq!(settings.dock_display_mode, DockDisplayMode::MenuBarOnly);
-    }
-
-    #[test]
-    fn hidden_tray_mode_keeps_a_visible_dock_entry() {
-        let mut settings = AppSettings {
-            tray_display_mode: TrayDisplayMode::Hidden,
-            dock_display_mode: DockDisplayMode::MenuBarOnly,
-            ..Default::default()
-        };
-
-        assert!(ensure_dock_entry_for_tray_mode(&mut settings));
-        assert_eq!(settings.tray_display_mode, TrayDisplayMode::Hidden);
-        assert_eq!(settings.dock_display_mode, DockDisplayMode::ShowInDock);
-    }
 }

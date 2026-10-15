@@ -1,5 +1,6 @@
 import { CenteredSelect } from "./components/CenteredSelect";
 import { groupAccountsByPlan, selectAccountPanel } from "./lib/accountGroups";
+import { selectRefreshAccounts } from "./lib/refreshPolicy";
 import { ActionIcon } from "./components/ActionIcon";
 import { localizeError } from "./lib/errors";
 import { AccountTransferModal } from "./components/AccountTransferModal";
@@ -246,6 +247,12 @@ function App() {
   const [closeBehaviorDontAskAgain, setCloseBehaviorDontAskAgain] = useState(false);
   const [isCompletingCloseBehavior, setIsCompletingCloseBehavior] = useState(false);
   const accountsRef = useRef(accounts);
+  const selectedPlanTabRef = useRef(runtimePreferences.preferences.selected_plan_tab);
+  selectedPlanTabRef.current = runtimePreferences.preferences.selected_plan_tab;
+  const getCategoryTargets = useCallback(() =>
+    selectRefreshAccounts(accountsRef.current, "category", selectedPlanTabRef.current), []);
+  const isCategoryTarget = useCallback((accountId: string) =>
+    getCategoryTargets().some(account => account.id === accountId), [getCategoryTargets]);
   const autoWarmupAccountIdsRef = useRef(autoWarmupAccountIds);
   const autoWarmupLedgerRef = useRef(autoWarmupLedger);
   const autoWarmupRunningIdsRef = useRef(autoWarmupRunningIds);
@@ -519,7 +526,7 @@ function App() {
     setIsRefreshing(true);
     setRefreshSuccess(false);
     try {
-      const results = await refreshUsage(undefined, { refreshMetadata: true });
+      const results = await refreshUsage(getCategoryTargets(), { refreshMetadata: true });
       const failures = results?.filter(usage => usage.error).length ?? 0;
       if (failures) {showWarmupToast(msg(`${failures} accounts could not refresh. Check the account messages.`, `${failures} 个账号刷新失败，请查看账号卡片中的提示。`), true);return;}
       setRefreshSuccess(true);
@@ -753,6 +760,7 @@ function App() {
 
   const runAutoWarmupForAccount = useCallback(
     async (accountId: string, accountName: string) => {
+      if (!isCategoryTarget(accountId)) return;
       if (autoWarmupRunningIdsRef.current.has(accountId)) return;
       autoWarmupRunningIdsRef.current.add(accountId);
       setAutoWarmupRunningIds((prev) => new Set(prev).add(accountId));
@@ -767,6 +775,7 @@ function App() {
           return;
         }
 
+        if (!isCategoryTarget(accountId)) return;
         const window = getDueAutoWarmupForAccount(accountId, freshUsage);
         if (!window) return;
 
@@ -794,6 +803,7 @@ function App() {
       backOffAutoWarmupRetry,
       formatWarmupError,
       getDueAutoWarmupForAccount,
+      isCategoryTarget,
       markSuccessfulWarmup,
       refreshSingleUsage,
       showWarmupToast,
@@ -802,10 +812,10 @@ function App() {
   );
 
   useEffect(() => {
-    if (!isTauriRuntime() || (!autoWarmupAllEnabled && autoWarmupAccountIds.size === 0)) return;
+    if (!isTauriRuntime() || !runtimePreferences.ready || !listReady || (!autoWarmupAllEnabled && autoWarmupAccountIds.size === 0)) return;
 
     const checkAutoWarmup = () => {
-      for (const account of accountsRef.current) {
+      for (const account of getCategoryTargets()) {
         const autoEnabled =
           autoWarmupAllEnabled || autoWarmupAccountIdsRef.current.has(account.id);
         if (!autoEnabled || autoWarmupRunningIdsRef.current.has(account.id)) continue;
@@ -813,7 +823,7 @@ function App() {
         const retryAfter = autoWarmupRetryAfterRef.current[account.id];
         if (retryAfter && Date.now() < retryAfter) continue;
 
-        if (!account.usage?.from_cache && !getDueAutoWarmupForAccount(account.id, account.usage)) continue;
+        if (account.usage && !account.usage.from_cache && !getDueAutoWarmupForAccount(account.id, account.usage)) continue;
 
         void runAutoWarmupForAccount(account.id, account.name);
       }
@@ -829,13 +839,17 @@ function App() {
   }, [
     autoWarmupAccountIds.size,
     autoWarmupAllEnabled,
+    runtimePreferences.ready,
+    runtimePreferences.preferences.selected_plan_tab,
+    listReady,
+    getCategoryTargets,
     getDueAutoWarmupForAccount,
     runAutoWarmupForAccount,
   ]);
 
   const runTimedWarmup = useCallback(async () => {
     if (timedWarmupRunningRef.current) return;
-    const targets = accountsRef.current.filter(account => account.auth_mode === "chat_g_p_t");
+    const targets = getCategoryTargets().filter(account => account.auth_mode === "chat_g_p_t");
     if (targets.length === 0) return;
     timedWarmupRunningRef.current = true;
     setTimedWarmupRunning(true);
@@ -843,10 +857,12 @@ function App() {
       let warmed = 0;
       let failed = 0;
       for (const account of targets) {
+        if (!isCategoryTarget(account.id)) continue;
         const lastSuccess = autoWarmupLedgerRef.current[account.id]?.lastSuccessfulWarmupAt;
         if (autoWarmupRunningIdsRef.current.has(account.id) || (lastSuccess && Date.now() - lastSuccess < 60_000)) continue;
         try {
           const freshUsage = await refreshSingleUsage(account.id);
+          if (!isCategoryTarget(account.id)) continue;
           if (!getTimedWarmupTargets([{ ...account, usage: freshUsage, usageLoading: false }]).length) continue;
           const refreshedSuccess = autoWarmupLedgerRef.current[account.id]?.lastSuccessfulWarmupAt;
           if (autoWarmupRunningIdsRef.current.has(account.id) || (refreshedSuccess && Date.now() - refreshedSuccess < 60_000)) continue;
@@ -871,10 +887,10 @@ function App() {
       timedWarmupRunningRef.current = false;
       setTimedWarmupRunning(false);
     }
-  }, [markSuccessfulWarmup, refreshSingleUsage, showWarmupToast, warmupAccount]);
+  }, [getCategoryTargets, isCategoryTarget, markSuccessfulWarmup, refreshSingleUsage, showWarmupToast, warmupAccount]);
 
   useEffect(() => {
-    if (!isTauriRuntime() || !timedWarmupEnabled || timedWarmupTimes.length === 0) return;
+    if (!isTauriRuntime() || !runtimePreferences.ready || !listReady || !timedWarmupEnabled || timedWarmupTimes.length === 0) return;
 
     const checkTimedWarmup = () => {
       if (timedWarmupRunningRef.current) return;
@@ -889,7 +905,7 @@ function App() {
       // asleep) is skipped rather than warmed late at the wrong moment.
       if (!timedWarmupTimes.includes(currentTime)) return;
       if (timedWarmupLastFireRef.current[currentTime] === todayKey) return;
-      if (!accountsRef.current.some(account => account.auth_mode === "chat_g_p_t")) return;
+      if (!getCategoryTargets().some(account => account.auth_mode === "chat_g_p_t")) return;
 
       // Mark before running so a slow warm-up can't double-fire on the next tick.
       timedWarmupLastFireRef.current[currentTime] = todayKey;
@@ -914,6 +930,10 @@ function App() {
   }, [
     timedWarmupEnabled,
     timedWarmupTimes,
+    runtimePreferences.ready,
+    runtimePreferences.preferences.selected_plan_tab,
+    listReady,
+    getCategoryTargets,
     accounts.length,
     runTimedWarmup,
   ]);
@@ -1231,7 +1251,7 @@ function App() {
                 onClick={handleRefresh}
                 disabled={isRefreshing}
                 className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-500 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-wait disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-blue-900/20"
-                title={isRefreshing ? t("Refreshing all usage") : t("Refresh all usage")} aria-label={t("Refresh all usage")}
+                title={`${isRefreshing ? t("Refreshing...") : t("Refresh usage")}: ${getPlanTabLabel(effectivePlanTab)} · ${t("Including the account in use; invalid accounts skipped")}`} aria-label={`${t("Refresh usage")}: ${getPlanTabLabel(effectivePlanTab)}`}
               >
                 <ActionIcon name="refresh" spinning={isRefreshing} />
               </button>
@@ -1465,12 +1485,12 @@ function App() {
           theme={themeMode}
           onThemeChange={setThemeMode}
           autoWarmupEnabled={autoWarmupAllEnabled}
-          autoWarmupLabel={headerAutoWarmupLabel}
+          autoWarmupLabel={`${headerAutoWarmupLabel} · ${getPlanTabLabel(effectivePlanTab)} · ${t("Including the account in use; invalid accounts skipped")}`}
           onAutoWarmupChange={setAutoWarmupAllEnabled}
           warmupAvailable={isTauriRuntime() && accounts.length > 0}
           timedWarmupEnabled={timedWarmupEnabled}
           timedWarmupTimes={timedWarmupTimes}
-          timedWarmupLabel={timedWarmupLabel}
+          timedWarmupLabel={`${timedWarmupLabel} · ${getPlanTabLabel(effectivePlanTab)} · ${t("Including the account in use; invalid accounts skipped")}`}
           onTimedWarmupChange={setTimedWarmupEnabled}
           onTimedWarmupTimesChange={(times) => setTimedWarmupTimes(normalizeTimedWarmupTimes(times))}
           onClose={() => setIsSettingsOpen(false)}
@@ -1559,7 +1579,7 @@ function App() {
       />
 
       {/* Import/Export Config Modal */}
-      <AccountTransferModal open={isConfigModalOpen} mode={transferMode} accountId={exportAccountId} onClose={() => setIsConfigModalOpen(false)} onImported={async (summary) => {const list = await loadAccounts(true);await refreshUsage(list.filter(account => summary.affected_account_ids.includes(account.id)), { refreshMetadata: true });}} />
+      <AccountTransferModal open={isConfigModalOpen} mode={transferMode} accountId={exportAccountId} accounts={accounts} onClose={() => setIsConfigModalOpen(false)} onImported={async (summary) => {const list = await loadAccounts(true);await refreshUsage(list.filter(account => summary.affected_account_ids.includes(account.id)), { refreshMetadata: true });}} />
       <UpdateChecker updater={updater} settingsOpen={isSettingsOpen} />
 
     </div>

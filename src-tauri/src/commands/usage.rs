@@ -160,6 +160,10 @@ pub async fn warmup_account(account_id: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
 
+    if account.credentials_invalid {
+        return Err("Account credentials invalid; sign in again".into());
+    }
+
     send_warmup(&account).await.map_err(|e| e.to_string())
 }
 

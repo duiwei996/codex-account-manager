@@ -30,3 +30,18 @@ test("category refresh filters plans and never refreshes invalid credentials, ev
   assert.deepEqual(selectRefreshAccounts(accounts, "category", "api_key").map(a => a.id), ["api"]);
   assert.deepEqual(selectRefreshAccounts(accounts, "category", "all").map(a => a.id), ["team", "plus", "api"]);
 });
+
+test("category includes a valid account in use across tabs exactly once", () => {
+  const accounts = [
+    { id: "active", is_active: true, plan_type: "plus" },
+    { id: "team", is_active: false, plan_type: "team" },
+    { id: "other", is_active: false, plan_type: "free" },
+    { id: "invalid", is_active: false, plan_type: "team", credentials_invalid: true },
+  ];
+  const ids = (scope: "current" | "category", tab: string) => selectRefreshAccounts(accounts, scope, tab).map(a => a.id);
+  assert.deepEqual(ids("category", "team"), ["active", "team"]);
+  assert.deepEqual(ids("category", "plus"), ["active"]);
+  assert.deepEqual(ids("category", "all"), ["active", "team", "other"]);
+  assert.deepEqual(ids("category", "unknown"), ["active"]);
+  assert.deepEqual(ids("current", "team"), ["active"]);
+});

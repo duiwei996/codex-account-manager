@@ -91,7 +91,6 @@ pub fn run() {
             commands::get_runtime_preferences,
             commands::set_runtime_preferences,
             commands::set_ui_language,
-            commands::set_tray_display_mode,
             commands::set_account_switch_mode,
             commands::open_codex_app,
             commands::get_codex_reopen_info,

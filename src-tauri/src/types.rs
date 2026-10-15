@@ -21,15 +21,6 @@ pub struct AccountsStore {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum TrayDisplayMode {
-    IconAndSession,
-    #[default]
-    ActiveUsageText,
-    Hidden,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
 pub enum DockDisplayMode {
     #[default]
     ShowInDock,
@@ -67,7 +58,6 @@ pub struct AppSettings {
     pub refresh_interval_seconds: u64,
     pub selected_plan_tab: String,
     pub account_switch_mode: AccountSwitchMode,
-    pub tray_display_mode: TrayDisplayMode,
     pub dock_display_mode: DockDisplayMode,
     pub ui_language: String,
     #[serde(default = "default_close_behavior_prompt_enabled")]
@@ -84,7 +74,6 @@ impl Default for AppSettings {
             refresh_interval_seconds: 60,
             selected_plan_tab: "all".into(),
             account_switch_mode: AccountSwitchMode::default(),
-            tray_display_mode: TrayDisplayMode::default(),
             dock_display_mode: DockDisplayMode::default(),
             ui_language: "zh-CN".to_string(),
             close_behavior_prompt_enabled: true,
@@ -112,7 +101,9 @@ impl AppSettings {
         !account.credentials_invalid
             && match self.refresh_scope {
                 RefreshScope::Current => active_id == Some(account.id.as_str()),
-                RefreshScope::Category => self.includes_category(account),
+                RefreshScope::Category => {
+                    active_id == Some(account.id.as_str()) || self.includes_category(account)
+                }
             }
     }
 
@@ -573,7 +564,6 @@ pub struct CreditStatusDetails {
 mod tests {
     use super::{
         parse_chatgpt_id_token_claims, AccountInfo, AppSettings, DockDisplayMode, StoredAccount,
-        TrayDisplayMode,
     };
     use base64::Engine;
     use chrono::{TimeZone, Utc};
@@ -621,13 +611,28 @@ mod tests {
         let settings: AppSettings =
             serde_json::from_str(r#"{"tray_display_mode":"active_usage_text"}"#).unwrap();
 
-        assert_eq!(settings.tray_display_mode, TrayDisplayMode::ActiveUsageText);
         assert_eq!(settings.dock_display_mode, DockDisplayMode::ShowInDock);
         assert!(settings.close_behavior_prompt_enabled);
         assert_eq!(
             settings.account_switch_mode,
             super::AccountSwitchMode::ForceClose
         );
+    }
+    #[test]
+    fn retired_tray_modes_are_ignored_and_not_saved_again() {
+        for mode in ["hidden", "icon_and_session", "active_usage_text"] {
+            let settings: AppSettings = serde_json::from_value(serde_json::json!({
+                "tray_display_mode": mode, "refresh_interval_seconds": 120,
+                "dock_display_mode": "menu_bar_only"
+            }))
+            .unwrap();
+            assert_eq!(settings.refresh_interval_seconds, 120);
+            assert_eq!(settings.dock_display_mode, DockDisplayMode::MenuBarOnly);
+            assert!(serde_json::to_value(settings)
+                .unwrap()
+                .get("tray_display_mode")
+                .is_none());
+        }
     }
 }
 

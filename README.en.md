@@ -34,14 +34,16 @@ macOS installers use ad-hoc signing and are not notarized by Apple. If the first
 1. Open the app and add an account by signing in through your browser or importing an existing `auth.json`.
 2. View account information in the account list, select an account and switch to it.
 3. You can also switch accounts from the system tray.
-4. Click the top transfer icon to switch between Import and Export tabs. Account cards also support single-account export in official auth.json or CPA format.
+4. Click the top transfer icon to switch between Import and Export tabs. Export filters default to all categories and valid accounts; both dropdowns place All first. Account cards also support single-account export in official auth.json or CPA format.
 5. When a new version is offered, confirm installation and restart the app as prompted.
 
 JSON files contain full login credentials; keep them private. CPA Codex format supports signed-in accounts; API key accounts use official format. Optional warm-ups may consume account quota.
 
-Settings provide startup behavior, automatic refresh scope and interval, and automatic update checks. Automatic refresh defaults to the active account every minute; background polling uses five times the interval. Launch at login and minimize to tray at login are enabled by default. The top transfer icon opens Import and Export tabs.
+Settings provide startup behavior, automatic refresh scope and interval, and automatic update checks. Automatic refresh defaults to the selected category plus the account in use every minute; active-account-only scope is also available. Invalid accounts are skipped, and background polling uses five times the interval. Refresh intervals and warm-up settings are shared across categories. Launch at login and minimize to tray at login are enabled by default.
 
-Scheduled warm-up times appear as tags; use the pencil button to edit them in a dialog. Schedules use local time while the app is running; missed times are skipped. Automatic warm-up runs near the beginning of a quota window, at most once per window. Both modes check live quota before sending a request.
+Top refresh and both warm-up modes target valid accounts in the selected category plus the account in use, without duplicates. All categories includes every valid account; subsequent warm-up requests follow category changes. Scheduled warm-up times appear as tags; use the pencil button to edit them in a dialog. Schedules use local time while the app is running; missed times are skipped. Automatic warm-up runs near the beginning of a quota window, at most once per window. Both modes check live quota before sending a request.
+
+The tray always uses the active account's hourly and weekly remaining quota mode, with no display-mode setting. Old hidden-tray preferences are ignored. macOS shows quota text in the menu bar; Windows keeps the tray icon and its quota panel.
 
 On startup, previously fetched account information, quota and statistics appear immediately while data refreshes in the background. Accounts without cached data are fetched once; expired authorization or request failures preserve the last successful values.
 

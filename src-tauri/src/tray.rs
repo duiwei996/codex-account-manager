@@ -17,7 +17,7 @@ use crate::{
     api::usage::refresh_all_usage,
     auth::{get_accounts_file, load_accounts, load_app_settings},
     commands::{is_codex_running_switch_block, restore_main_window, switch_account_by_id},
-    types::{AccountsStore, TrayDisplayMode, UsageInfo},
+    types::{AccountsStore, UsageInfo},
 };
 
 static TRAY_USAGE: LazyLock<Mutex<HashMap<String, UsageInfo>>> =
@@ -373,99 +373,39 @@ fn refresh_menu_on_main_thread<R: Runtime>(app: &AppHandle<R>) {
     match load_accounts()
         .map_err(|error| error.to_string())
         .and_then(|store| {
-            let settings = load_app_settings().unwrap_or_default();
-            let title = active_tray_title(
-                store.active_account_id.as_deref(),
-                settings.tray_display_mode,
-            );
+            let title = active_usage_title(store.active_account_id.as_deref());
             let menu = build_menu(app, &store).map_err(|error| error.to_string())?;
-            Ok((menu, title, settings.tray_display_mode))
+            Ok((menu, title))
         }) {
-        Ok((menu, title, mode)) => {
+        Ok((menu, title)) => {
             if let Err(error) = tray.set_menu(Some(menu)) {
                 eprintln!("Failed to refresh tray menu: {error}");
             }
-            refresh_tray_display(&tray, mode, title.as_deref());
+            refresh_tray_display(&tray, &title);
         }
         Err(error) => eprintln!("Failed to build tray menu: {error}"),
     }
 }
 
-fn refresh_tray_display<R: Runtime>(
-    tray: &tauri::tray::TrayIcon<R>,
-    mode: TrayDisplayMode,
-    title: Option<&str>,
-) {
-    match mode {
-        TrayDisplayMode::IconAndSession => {
-            if let Err(error) = tray.set_visible(true) {
-                eprintln!("Failed to show tray icon: {error}");
-            }
-            #[cfg(target_os = "macos")]
-            {
-                if let Err(error) = tray.set_icon(Some(TRAY_ICON)) {
-                    eprintln!("Failed to refresh tray icon: {error}");
-                }
-                if let Err(error) = tray.set_icon_as_template(true) {
-                    eprintln!("Failed to refresh tray icon template mode: {error}");
-                }
-            }
-            #[cfg(target_os = "windows")]
-            if let Err(error) = tray.set_icon(Some(tray_icon_for_theme(current_system_theme()))) {
-                eprintln!("Failed to refresh tray icon: {error}");
-            }
-            if let Err(error) = tray.set_title(title) {
-                eprintln!("Failed to refresh tray title: {error}");
-            }
-        }
-        TrayDisplayMode::ActiveUsageText => {
-            if let Err(error) = tray.set_visible(true) {
-                eprintln!("Failed to show tray icon: {error}");
-            }
-            #[cfg(target_os = "macos")]
-            if let Err(error) = tray.set_icon(None) {
-                eprintln!("Failed to hide tray icon: {error}");
-            }
-            #[cfg(target_os = "windows")]
-            if let Err(error) = tray.set_icon(Some(tray_icon_for_theme(current_system_theme()))) {
-                eprintln!("Failed to refresh tray icon: {error}");
-            }
-            if let Err(error) = tray.set_title(title) {
-                eprintln!("Failed to refresh tray title: {error}");
-            }
-        }
-        TrayDisplayMode::Hidden => {
-            if let Err(error) = tray.set_title(None::<&str>) {
-                eprintln!("Failed to clear tray title: {error}");
-            }
-            if let Err(error) = tray.set_visible(false) {
-                eprintln!("Failed to hide tray icon: {error}");
-            }
-        }
+fn refresh_tray_display<R: Runtime>(tray: &tauri::tray::TrayIcon<R>, title: &str) {
+    if let Err(error) = tray.set_visible(true) {
+        eprintln!("Failed to show tray icon: {error}");
+    }
+    #[cfg(target_os = "macos")]
+    if let Err(error) = tray.set_icon(None) {
+        eprintln!("Failed to hide tray icon: {error}");
+    }
+    #[cfg(target_os = "windows")]
+    if let Err(error) = tray.set_icon(Some(tray_icon_for_theme(current_system_theme()))) {
+        eprintln!("Failed to refresh tray icon: {error}");
+    }
+    if let Err(error) = tray.set_title(Some(title)) {
+        eprintln!("Failed to refresh tray title: {error}");
     }
 }
 
 fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
     restore_main_window(app);
-}
-
-// The tray title sits after the icon, e.g. "[icon] 66%".
-fn active_session_title(active_account_id: Option<&str>) -> Option<String> {
-    let active_account_id = active_account_id?;
-    let cache = TRAY_USAGE.lock().ok()?;
-    let usage = cache.get(active_account_id)?;
-    session_remaining_title(
-        usage.primary_used_percent.or(usage.secondary_used_percent),
-        usage.error.is_some(),
-    )
-}
-
-fn active_tray_title(active_account_id: Option<&str>, mode: TrayDisplayMode) -> Option<String> {
-    match mode {
-        TrayDisplayMode::IconAndSession => active_session_title(active_account_id),
-        TrayDisplayMode::ActiveUsageText => Some(active_usage_title(active_account_id)),
-        TrayDisplayMode::Hidden => None,
-    }
 }
 
 fn active_usage_title(active_account_id: Option<&str>) -> String {
@@ -820,13 +760,5 @@ mod tests {
     fn active_usage_title_falls_back_when_usage_is_missing() {
         assert_eq!(active_usage_title(Some("missing")), "H:-- W:--");
         assert_eq!(active_usage_title(None), "Codex");
-    }
-
-    #[test]
-    fn hidden_tray_mode_has_no_title() {
-        assert_eq!(
-            active_tray_title(Some("active"), TrayDisplayMode::Hidden),
-            None
-        );
     }
 }

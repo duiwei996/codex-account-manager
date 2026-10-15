@@ -12,10 +12,8 @@ import { UpdateSettings } from "./UpdateSettings";
 import { ToggleSwitch } from "./ToggleSwitch";
 import type { RuntimePreferencesController } from "../hooks/useRuntimePreferences";
 
-type TrayDisplayMode = "icon_and_session" | "active_usage_text" | "hidden";
 interface DisplaySettings {
   account_switch_mode: "direct" | "force_close";
-  tray_display_mode: TrayDisplayMode;
   dock_display_mode: DockDisplayMode | null;
 }
 
@@ -96,7 +94,6 @@ export function SettingsModal({
     setError(null);
     try {
       await invokeBackend(command, { mode });
-      // Changing tray visibility can also adjust the Dock mode, and vice versa.
       await loadDisplaySettings();
     } catch (err) {
       requestId.current += 1;
@@ -153,14 +150,6 @@ export function SettingsModal({
               </div>
             </>}
             {desktop && displaySettings && <>
-              <div className={rowClassName}>
-                <label htmlFor="tray-display-mode" className={labelClassName}>{translate("Tray")}</label>
-                <CenteredSelect id="tray-display-mode" value={displaySettings.tray_display_mode} disabled={saving} onChange={(event) => void changeDisplaySetting("set_tray_display_mode", event.target.value)} className={selectClassName}>
-                  <option value="icon_and_session">{translate("Icon + Session")}</option>
-                  <option value="active_usage_text">{translate("Hourly + Weekly")}</option>
-                  <option value="hidden">{translate("Hidden")}</option>
-                </CenteredSelect>
-              </div>
               {displaySettings.dock_display_mode !== null && <div>
                 <div className={rowClassName}>
                   <label htmlFor="dock-display-mode" className={labelClassName}>{translate("Dock Icon")}</label>
@@ -169,14 +158,13 @@ export function SettingsModal({
                     <option value="menu_bar_only">{translate("Menu Bar Only")}</option>
                   </CenteredSelect>
                 </div>
-                <p className="pb-3 text-xs text-gray-500 dark:text-gray-400">{translate("At least one of the Dock or tray icons stays visible so you can reopen Codex Account Manager.")}</p>
               </div>}
             </>}
             </>}
             {section === "accounts" && <>
             <div>
               <div className={rowClassName}>
-                <div><label htmlFor="refresh-scope" className={labelClassName}>{translate("Automatic refresh scope")}</label><p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{translate("Refresh the account in use or valid accounts in the selected category.")}</p></div>
+                <div><label htmlFor="refresh-scope" className={labelClassName}>{translate("Automatic refresh scope")}</label><p className="mt-1 text-xs text-gray-500 dark:text-gray-400">{translate("Refresh the account in use, or the selected category plus the account in use. Invalid accounts are skipped.")}</p></div>
                 <CenteredSelect id="refresh-scope" className={selectClassName} value={preferences.refresh_scope} disabled={!ready || savingPreferences} onChange={event => void change({ refresh_scope: event.target.value as "current" | "category" })}>
                   <option value="current">{translate("Current account")}</option><option value="category">{translate("Current category")}</option>
                 </CenteredSelect>
