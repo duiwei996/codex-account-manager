@@ -26,7 +26,8 @@
     "version:major": "node scripts/bump-version.mjs major",
     "test": "node --experimental-strip-types --test tests/*.test.*",
     "licenses:generate": "node scripts/generate-third-party-notices.mjs",
-    "release:verify": "node scripts/verify-release.mjs"
+    "release:verify": "node scripts/verify-release.mjs",
+    "release:preflight": "node scripts/release-preflight.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.2",

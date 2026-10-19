@@ -77,6 +77,8 @@ Windows 的 `build:local` 会在官方安装器外生成项目自有安装入口
 
 修改 `VERSION` 后运行 `pnpm version:sync` 同步前端、Tauri 和 Cargo；也可通过 `pnpm version:bump 1.0.5` 明确更新所有版本文件。`pnpm version:check` 和构建入口会检查一致性。正式发布前确认目标版本尚未使用；已预留的草稿也视为已使用，不覆盖原有产物。
 
+推送发布前先安装 `cargo-audit 0.22.1` 并运行 `pnpm release:preflight`，核对版本、Rust 格式及前后端依赖安全审计；审计会读取当前漏洞库，过去通过的锁文件也须重新检查。官方预编译审计器可通过 `CARGO_AUDIT_BIN` 指定路径。此命令不替代受影响的行为测试、编译及云端各平台验收。更新插件关闭旧版 ZIP 解包支持；本项目使用原始 EXE/MSI、AppImage 和 macOS tar.gz 更新包。
+
 ## 许可证
 
 [MIT](LICENSE)。本项目不是 OpenAI 官方应用。
