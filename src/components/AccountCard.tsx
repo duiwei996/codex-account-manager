@@ -1,4 +1,4 @@
-import { readStatsCache, writeStatsCache } from "../lib/accountCache";
+import { RESET_CACHE_CHANGED_EVENT, readResetCreditsCache, readStatsCache, writeStatsCache } from "../lib/accountCache";
 import { ActionIcon } from "./ActionIcon";
 import { getLocale, tr, useLocale } from "../lib/i18n";
 import { useCallback, useState, useRef, useEffect } from "react";
@@ -133,7 +133,7 @@ export function AccountCard({
   );
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(account.name);
-  const [resetCredits, setResetCredits] = useState<AccountResetCredits | null>(null);
+  const [resetCredits, setResetCredits] = useState<AccountResetCredits | null>(() => account.auth_mode === "chat_g_p_t" ? readResetCreditsCache(account.id)?.data ?? null : null);
   const [statsOpen, setStatsOpen] = useState(false);
   const closeStats = useCallback(() => setStatsOpen(false), []);
   const [usageStats, setUsageStats] = useState<AccountUsageStatsInfo | null>(() => readStatsCache(account.id));
@@ -208,7 +208,7 @@ export function AccountCard({
     const requestId = ++resetRequestSeq.current;
 
     if (account.credentials_invalid || account.auth_mode !== "chat_g_p_t") {
-      setResetCredits(null);
+      setResetCredits(account.auth_mode === "chat_g_p_t" ? readResetCreditsCache(account.id)?.data ?? null : null);
       return;
     }
 
@@ -217,25 +217,25 @@ export function AccountCard({
         accountId: account.id,
       });
       if (requestId !== resetRequestSeq.current) return;
-      setResetCredits(stats.account_id === account.id ? stats.reset_credits : null);
       if (stats.account_id === account.id && stats.available && !stats.error) { writeStatsCache(stats); setUsageStats({ ...stats, from_cache: false }); }
+      if (stats.account_id === account.id) setResetCredits(readResetCreditsCache(account.id)?.data ?? null);
     } catch {
       if (requestId !== resetRequestSeq.current) return;
-      setResetCredits(null);
+      setResetCredits(readResetCreditsCache(account.id)?.data ?? null);
     }
   }, [account.auth_mode, account.id, account.credentials_invalid]);
 
   const handleStatsLoaded = useCallback(
     (stats: AccountUsageStatsInfo | null) => {
       if (!stats || stats.account_id !== account.id) return;
-      setResetCredits(stats.reset_credits);
       if (stats.available && !stats.error) { writeStatsCache(stats); setUsageStats({ ...stats, from_cache: false }); }
+      setResetCredits(readResetCreditsCache(account.id)?.data ?? null);
     },
     [account.id]
   );
 
   useEffect(() => {
-    setResetCredits(null);
+    setResetCredits(account.auth_mode === "chat_g_p_t" ? readResetCreditsCache(account.id)?.data ?? null : null);
     setUsageStats(readStatsCache(account.id));
     setStatsOpen(false);
 
@@ -249,6 +249,12 @@ export function AccountCard({
       window.clearInterval(timer);
     };
   }, [loadResetCredits]);
+
+  useEffect(() => {
+    const update = () => setResetCredits(account.auth_mode === "chat_g_p_t" ? readResetCreditsCache(account.id)?.data ?? null : null);
+    window.addEventListener(RESET_CACHE_CHANGED_EVENT,update);
+    return () => window.removeEventListener(RESET_CACHE_CHANGED_EVENT,update);
+  }, [account.id,account.auth_mode]);
 
 
   return (

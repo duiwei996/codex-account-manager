@@ -60,6 +60,13 @@ export function ResetCreditsMenu({
   const wrapperRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const popupId = useId();
+  const [expiryClock, setExpiryClock] = useState(0);
+  useEffect(() => {
+    const next = getAvailableResetCredits(resetCredits).map(c=>c.expires_at ? Date.parse(c.expires_at) : Infinity).filter(Number.isFinite).sort((a,b)=>a-b)[0];
+    if (!next) return;
+    const timer = window.setTimeout(()=>setExpiryClock(n=>n+1),Math.min(2_147_483_647,Math.max(1,next-Date.now()+25)));
+    return () => window.clearTimeout(timer);
+  }, [resetCredits,expiryClock]);
   const availableCredits = getAvailableResetCredits(resetCredits);
   const count = availableCredits.length;
   const countLabel = locale === "zh-CN" ? `${count} 次重置` : count === 1 ? "1 reset" : `${count} resets`;

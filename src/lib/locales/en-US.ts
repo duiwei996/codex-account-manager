@@ -1,4 +1,6 @@
 export default {
+  "WebDAV Sync": "WebDAV Sync",
+  "WebDAV sync is available in the desktop app.": "WebDAV sync is available in the desktop app.",
   "Login expired": "Login expired",
   "Current category": "Current category",
   "Sign in again": "Sign in again",

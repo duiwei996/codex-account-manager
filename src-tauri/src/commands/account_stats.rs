@@ -27,6 +27,7 @@ pub struct AccountUsageStats {
     pub daily: Vec<AccountDailyUsage>,
     pub top_invocations: Vec<AccountTopInvocation>,
     pub reset_credits: Option<AccountResetCredits>,
+    pub reset_credits_recorded_at: Option<String>,
     pub error: Option<String>,
 }
 
@@ -245,6 +246,9 @@ async fn parse_profile_usage_with_reset_credits(
 
     if stats.available {
         stats.reset_credits = fetch_reset_credits(account).await.ok();
+        if stats.reset_credits.is_some() {
+            stats.reset_credits_recorded_at = Some(Utc::now().to_rfc3339());
+        }
     }
 
     Ok(stats)
@@ -332,6 +336,7 @@ fn map_profile_usage(account_id: &str, payload: ProfileUsageResponse) -> Account
             .map(map_top_invocation)
             .collect(),
         reset_credits: None,
+        reset_credits_recorded_at: None,
         error: stats_error,
     }
 }
@@ -405,6 +410,7 @@ fn unavailable_stats(account_id: String, message: &str) -> AccountUsageStats {
         daily: Vec::new(),
         top_invocations: Vec::new(),
         reset_credits: None,
+        reset_credits_recorded_at: None,
         error: Some(message.to_string()),
     }
 }

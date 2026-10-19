@@ -6,7 +6,7 @@ import type {
   WarmupSummary,
 } from "../types";
 import { invokeBackend, isTauriRuntime, type FileSource } from "../lib/platform";
-import { readAccountCache, writeAccountCache } from "../lib/accountCache";
+import { ACCOUNT_QUOTA_CHANGED_EVENT, mergeAccountQuota, readAccountCache, writeAccountCache } from "../lib/accountCache";
 import { mergeUsageResult } from "../lib/usageDisplay";
 import { refreshDelay, selectRefreshAccounts } from "../lib/refreshPolicy";
 import type { RuntimePreferences } from "./useRuntimePreferences";
@@ -91,13 +91,14 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
 
       setAccounts(previous => {
         const byId = new Map(previous.map(account => [account.id, account]));
+        const disk = new Map(readAccountCache().map(a=>[a.id,a]));
         return accountList.map(account => {
           const cached = byId.get(account.id);
-          return { ...account,
+          return mergeAccountQuota({ ...account,
             plan_type: account.plan_type ?? cached?.plan_type ?? null,
-            subscription_expires_at: account.subscription_expires_at ?? cached?.subscription_expires_at ?? null,
+            subscription_expires_at: cached?.metadata_recorded_at ? cached.subscription_expires_at : account.subscription_expires_at ?? cached?.subscription_expires_at ?? null,
             metadata_recorded_at: cached?.metadata_recorded_at,
-            usage: cached?.usage, usageLoading: cached?.usageLoading ?? false };
+            usage: cached?.usage, usageLoading: cached?.usageLoading ?? false },disk.get(account.id));
         });
       });
       setListReady(true);
@@ -109,6 +110,12 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
       if (generation === loadGenerationRef.current) setLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    const updated = () => { void loadAccounts(true); };
+    window.addEventListener(ACCOUNT_QUOTA_CHANGED_EVENT,updated);
+    return () => window.removeEventListener(ACCOUNT_QUOTA_CHANGED_EVENT,updated);
+  }, [loadAccounts]);
 
   const refreshMetadata = useCallback(
     async (

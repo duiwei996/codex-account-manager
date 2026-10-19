@@ -1,6 +1,6 @@
 [package]
 name = "codex-switcher"
-version = "1.0.9"
+version = "1.0.10"
 description = "A multi-account manager for Codex CLI"
 authors = ["duiwei"]
 license = "MIT"
@@ -39,6 +39,8 @@ urlencoding = "2"
 futures = "0.3"
 url = "2"
 chacha20poly1305 = "0.10"
+flate2 = "1"
+quick-xml = { version = "0.42", features = ["serialize"] }
 tempfile = "3"
 fs2 = "0.4"
 zeroize = "1"

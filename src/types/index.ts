@@ -96,6 +96,7 @@ export interface AccountUsageStats {
   daily: AccountDailyUsage[];
   top_invocations: AccountTopInvocation[];
   reset_credits: AccountResetCredits | null;
+  reset_credits_recorded_at?: string | null;
   error: string | null;
 }
 

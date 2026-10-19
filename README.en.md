@@ -1,5 +1,13 @@
 # Codex Account Manager
 
+WebDAV sync is available under Settings → WebDAV Sync. Enter the server URL, username and password, browse to an existing folder (or enter its relative path), then independently select account sync and system settings sync. The password stays in the local OS credential store. Two-way sync merges both sides; first use, deletions and conflicts require a preview and confirmation. Previews and results show changes to this computer and the cloud separately, including account names and setting names. A changed data snapshot or cloud revision requires a new confirmation.
+
+More actions offers Replace cloud with local and Replace local with cloud, scoped to selected content. Both require confirmation and save an encrypted local recovery copy of the pre-operation data and baseline, with its path shown in the result. The latest such recovery copy is retained for each sync destination. Downloads never upload and stop if selected cloud content is missing. Uploads do not replace local data. Automatic two-way checks run at startup and every minute, uploading only changed content; first use, deletions, conflicts and errors pause the task and show a main-window notice linking to sync settings.
+
+Account sync also includes subscription expiry, hourly/weekly quotas and reset times, credit balance and unlimited-credit flags, and available reset credits with their expiry dates. Each observation group keeps the newest successful query; values are never added together. Downloaded caches are mapped to the destination's account IDs, displayed immediately and refreshed in the background. Expired reset credits no longer count. Errors preserve existing values; cached quotas do not trigger automatic warm-up. Cache-only changes neither create account edit conflicts nor resurrect deleted accounts. Older cloud files without caches remain readable.
+
+The cloud stores one compressed `accounts.sync.gz` file without additional encryption. It contains full credentials when account sync is selected; use trusted storage and HTTPS. The UI shows the actual file size. Active account selection, startup settings, device paths, WebDAV configuration, lifetime/daily statistics, invocation rankings and execution history stay local. Existing cloud files require strong ETags for updates. Sync does not switch accounts or replace the CLI's active `auth.json`; concurrent credential refreshes across computers can still require signing in again.
+
 A desktop application for managing multiple Codex accounts on Windows, macOS and Linux.
 
 [中文说明](README.md) · [Download installers](https://github.com/duiwei996/codex-account-manager/releases)

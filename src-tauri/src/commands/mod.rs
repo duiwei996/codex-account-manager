@@ -7,6 +7,8 @@ pub mod oauth;
 pub mod preferences;
 pub mod process;
 pub mod usage;
+pub mod webdav;
+pub(crate) mod webdav_cache;
 pub mod window;
 
 pub use account::*;

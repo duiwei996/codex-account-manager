@@ -643,7 +643,7 @@ dependencies = [
 
 [[package]]
 name = "codex-switcher"
-version = "1.0.9"
+version = "1.0.10"
 dependencies = [
  "anyhow",
  "axum",
@@ -651,10 +651,12 @@ dependencies = [
  "chacha20poly1305",
  "chrono",
  "dirs 6.0.0",
+ "flate2",
  "fs2",
  "futures",
  "keyring",
  "plist",
+ "quick-xml",
  "rand 0.9.5",
  "reqwest 0.12.28",
  "serde",
@@ -3393,6 +3395,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41b1177fdf999d2321d3fb46ff47159d9c1fb9ad66a4879f8c50a0b504615e9b"
 dependencies = [
  "memchr",
+ "serde",
 ]
 
 [[package]]

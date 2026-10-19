@@ -1,4 +1,5 @@
 import { CenteredSelect } from "./components/CenteredSelect";
+import { DAV_STATE_EVENT, davState, startDavAutoSync } from "./lib/webdav";
 import { groupAccountsByPlan, selectAccountPanel } from "./lib/accountGroups";
 import { selectRefreshAccounts } from "./lib/refreshPolicy";
 import { ActionIcon } from "./components/ActionIcon";
@@ -220,6 +221,14 @@ function App() {
     | "subscription_desc"
   >("deadline_asc");
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [settingsInitialSection, setSettingsInitialSection] = useState<"general" | "sync">("general");
+  const [davNeedsAttention, setDavNeedsAttention] = useState(false);
+  useEffect(() => {
+    const update = () => setDavNeedsAttention(davState.paused);
+    update();
+    window.addEventListener(DAV_STATE_EVENT, update);
+    return () => window.removeEventListener(DAV_STATE_EVENT, update);
+  }, []);
   const [isCompletingForceClose, setIsCompletingForceClose] = useState(false);
   const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const forceCloseInFlightRef = useRef(false);
@@ -454,6 +463,23 @@ function App() {
         .catch((err) => console.error("Failed to sync tray theme:", err));
     }
   }, [themeMode]);
+
+  useEffect(() => {
+    if (!listReady || !runtimePreferences.ready) return;
+    return startDavAutoSync();
+  }, [listReady, runtimePreferences.ready]);
+
+  useEffect(() => {
+    const applied = () => {
+      setThemeMode(readStoredTheme());
+      setAutoWarmupAllEnabled(readAutoWarmupAllEnabled());
+      setTimedWarmupEnabled(readTimedWarmupEnabled());
+      setTimedWarmupTimes(readTimedWarmupTimes());
+      void loadMaskedAccountIds().then(ids => setMaskedAccounts(new Set(ids)));
+    };
+    window.addEventListener("webdav-sync-completed", applied);
+    return () => window.removeEventListener("webdav-sync-completed", applied);
+  }, [loadMaskedAccountIds]);
 
   useEffect(() => {
     if (!isTauriRuntime() || isMacOs) return;
@@ -1275,6 +1301,10 @@ function App() {
         </div>
       )}
       <main className="max-w-6xl mx-auto px-6 pt-6 pb-8">
+        {davNeedsAttention && <div role="status" className="mb-4 flex items-center justify-between gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-100">
+          <span>{msg("WebDAV sync is paused. Review pending changes or connection errors.", "WebDAV 同步已暂停，请查看待确认的变化或连接问题。")}</span>
+          <button className="shrink-0 underline" onClick={() => { setSettingsInitialSection("sync"); setIsSettingsOpen(true); }}>{msg("Review sync", "查看同步")}</button>
+        </div>}
         {loading && accounts.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-20">
             <div className="animate-spin h-10 w-10 border-2 border-gray-900 dark:border-gray-100 border-t-transparent rounded-full mb-4"></div>
@@ -1480,6 +1510,7 @@ function App() {
 
       {isSettingsOpen && (
         <SettingsModal
+          initialSection={settingsInitialSection}
           runtimePreferences={runtimePreferences}
           updater={updater}
           theme={themeMode}
@@ -1493,7 +1524,7 @@ function App() {
           timedWarmupLabel={`${timedWarmupLabel} · ${getPlanTabLabel(effectivePlanTab)} · ${t("Including the account in use; invalid accounts skipped")}`}
           onTimedWarmupChange={setTimedWarmupEnabled}
           onTimedWarmupTimesChange={(times) => setTimedWarmupTimes(normalizeTimedWarmupTimes(times))}
-          onClose={() => setIsSettingsOpen(false)}
+          onClose={() => { setIsSettingsOpen(false); setSettingsInitialSection("general"); }}
         />
       )}
 

@@ -10,6 +10,7 @@ import type { ThemeMode } from "../lib/theme";
 import type { AppUpdater } from "../hooks/useAppUpdater";
 import { UpdateSettings } from "./UpdateSettings";
 import { ToggleSwitch } from "./ToggleSwitch";
+import { WebDavSettings } from "./WebDavSettings";
 import type { RuntimePreferencesController } from "../hooks/useRuntimePreferences";
 
 interface DisplaySettings {
@@ -18,6 +19,7 @@ interface DisplaySettings {
 }
 
 interface SettingsModalProps {
+  initialSection?: "general" | "accounts" | "sync" | "updates";
   runtimePreferences: RuntimePreferencesController;
   updater: AppUpdater;
   theme: ThemeMode;
@@ -35,6 +37,7 @@ interface SettingsModalProps {
 }
 
 export function SettingsModal({
+  initialSection = "general",
   runtimePreferences,
   updater,
   theme, onThemeChange,
@@ -44,7 +47,7 @@ export function SettingsModal({
   onClose,
 }: SettingsModalProps) {
   const locale = useLocale();
-  const [section, setSection] = useState<"general" | "accounts" | "updates">("general");
+  const [section, setSection] = useState<"general" | "accounts" | "sync" | "updates">(initialSection);
   const { preferences, change, ready, saving: savingPreferences, error: preferencesError } = runtimePreferences;
   const translate = (key: Parameters<typeof tr>[0]) => tr(key, locale);
   const [displaySettings, setDisplaySettings] = useState<DisplaySettings | null>(null);
@@ -116,14 +119,15 @@ export function SettingsModal({
           <button onClick={onClose} disabled={saving || savingPreferences} aria-label={translate("Close")} className="rounded-lg px-2 py-1 text-gray-400 hover:bg-gray-100 disabled:opacity-50 dark:hover:bg-gray-800">✕</button>
         </div>
         <div role="tablist" aria-label={translate("Settings")} className="flex shrink-0 gap-1 border-b border-gray-100 px-5 py-3 dark:border-gray-800">
-          {(["general", "accounts", "updates"] as const).map(key => <button key={key} id={`settings-${key}`} role="tab" aria-selected={section === key} aria-controls="settings-panel" tabIndex={section === key ? 0 : -1} onClick={() => setSection(key)}
-            onKeyDown={event => { const keys = ["general", "accounts", "updates"] as const; const index = keys.indexOf(key); if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) { event.preventDefault(); const next = keys[event.key === "Home" ? 0 : event.key === "End" ? 2 : (index + (event.key === "ArrowRight" ? 1 : 2)) % 3]; setSection(next); document.getElementById(`settings-${next}`)?.focus(); } }}
+          {(["general", "accounts", "sync", "updates"] as const).map(key => <button key={key} id={`settings-${key}`} role="tab" aria-selected={section === key} aria-controls="settings-panel" tabIndex={section === key ? 0 : -1} onClick={() => setSection(key)}
+            onKeyDown={event => { const keys = ["general", "accounts", "sync", "updates"] as const; const index = keys.indexOf(key); if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) { event.preventDefault(); const next = keys[event.key === "Home" ? 0 : event.key === "End" ? keys.length - 1 : (index + (event.key === "ArrowRight" ? 1 : keys.length - 1)) % keys.length]; setSection(next); document.getElementById(`settings-${next}`)?.focus(); } }}
             className={`min-w-0 flex-1 rounded-lg px-2 py-2 text-sm font-medium ${section === key ? "bg-blue-50 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300" : "text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-800"}`}>
-            {translate(key === "general" ? "General" : key === "accounts" ? "Accounts and automation" : "Updates and about")}
+            {translate(key === "general" ? "General" : key === "accounts" ? "Accounts and automation" : key === "sync" ? "WebDAV Sync" : "Updates and about")}
           </button>)}
         </div>
         <div id="settings-panel" role="tabpanel" aria-labelledby={`settings-${section}`} className="overflow-y-auto px-5 py-2">
           <div className="divide-y divide-gray-100 dark:divide-gray-800">
+            {section === "sync" && (desktop ? <WebDavSettings /> : <p className="py-4 text-sm text-gray-500">{translate("WebDAV sync is available in the desktop app.")}</p>)}
             {section === "general" && <>
             <div className={rowClassName}>
               <label htmlFor="app-language" className={labelClassName}>{translate("Language")}</label>

@@ -33,6 +33,7 @@ window.__TAURI_INTERNALS__ = {
       case "get_runtime_preferences": return { ...saved };
       case "set_runtime_preferences": saved = { ...args.preferences }; return { ...saved };
       case "get_display_settings": return { account_switch_mode: "direct", dock_display_mode: null };
+      case "get_webdav_config": return { config: { server: "", username: "", directory: "/", sync_accounts: true, sync_settings: true, auto_sync: false }, password_saved: false };
       case "list_accounts": return accounts.map(a => ({ ...a }));
       case "get_usage": if (failUsage) throw new Error("401 Unauthorized"); if (customUsage) return customUsage(args.accountId); return { account_id: args.accountId, primary_used_percent: 25, secondary_used_percent: 50, error: null };
       case "warmup_account": await new Promise(resolve => setTimeout(resolve, 20)); return null;
@@ -81,7 +82,7 @@ test("settings tabs expose switches and persist disabled startup and update choi
   }
   await act(async () => root.render(createElement(SettingsHarness)));
   await settle();
-  assert.equal(document.querySelectorAll('[role="tab"]').length, 3);
+  assert.equal(document.querySelectorAll('[role="tab"]').length, 4);
   assert.equal(document.querySelector('#tray-display-mode'), null);
   assert.equal(document.querySelector('#app-autostart').getAttribute('aria-checked'), 'true');
   await click('#app-autostart');
@@ -407,4 +408,20 @@ test("main page refresh and both warmups include the active account and exclude 
     customUsage = null;
     localStorage.clear();
   }
+});
+
+test("paused WebDAV sync is visible on the main page and opens the sync settings directly", async () => {
+  const { default: App } = await server.ssrLoadModule("/src/App.tsx");
+  const sync = await server.ssrLoadModule("/src/lib/webdav.ts");
+  localStorage.clear(); failUsage = false; customUsage = null;
+  accounts = [account("preview-account",true)]; saved = {...defaults};
+  await act(async () => root.render(createElement(App)));
+  await settle();
+  await act(async () => { sync.davState.paused = true; window.dispatchEvent(new window.Event(sync.DAV_STATE_EVENT)); });
+  assert.match(document.body.textContent,/WebDAV 同步已暂停/);
+  await act(async () => [...document.querySelectorAll('button')].find(b => b.textContent === '查看同步').click());
+  await settle();
+  assert.equal(document.querySelector('#settings-sync').getAttribute('aria-selected'),'true');
+  assert.match(document.body.textContent,/先读取云端，合并两边变化/);
+  await act(async () => { sync.davState.paused = false; window.dispatchEvent(new window.Event(sync.DAV_STATE_EVENT)); root.render(null); });
 });

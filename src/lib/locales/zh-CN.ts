@@ -1,4 +1,6 @@
 export default {
+  "WebDAV Sync": "WebDAV 同步",
+  "WebDAV sync is available in the desktop app.": "请在桌面应用中使用 WebDAV 同步。",
   "Login expired": "登录已失效",
   "Current category": "当前分类",
   "Sign in again": "重新登录",

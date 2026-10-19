@@ -82,6 +82,10 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            commands::webdav::get_webdav_config,
+            commands::webdav::save_webdav_config,
+            commands::webdav::list_webdav_directories,
+            commands::webdav::sync_webdav,
             export_accounts_json,
             save_accounts_json,
             import_accounts_json,
