@@ -422,6 +422,6 @@ test("paused WebDAV sync is visible on the main page and opens the sync settings
   await act(async () => [...document.querySelectorAll('button')].find(b => b.textContent === '查看同步').click());
   await settle();
   assert.equal(document.querySelector('#settings-sync').getAttribute('aria-selected'),'true');
-  assert.match(document.body.textContent,/先读取云端，合并两边变化/);
+  assert.ok(document.querySelector('input[aria-label="服务器地址"]'));
   await act(async () => { sync.davState.paused = false; window.dispatchEvent(new window.Event(sync.DAV_STATE_EVENT)); root.render(null); });
 });

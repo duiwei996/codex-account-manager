@@ -1497,7 +1497,7 @@ mod tests {
         assert_eq!(quota_cache::merge(&a, &b), quota_cache::merge(&b, &a));
     }
     #[test]
-    fn cache_refreshes_do_not_conflict_or_resurrect_deleted_accounts() {
+    fn cache_refreshes_do_not_conflict_and_missing_accounts_keep_the_remaining_copy() {
         let account = StoredAccount::new_api_key("Cache account".into(), "synthetic-key".into());
         let key = account_key(&account);
         let mut base = account_value(&account, false).unwrap();
@@ -1518,11 +1518,53 @@ mod tests {
         .unwrap();
         assert!(conflicts.is_empty());
         assert_eq!(merged["cache"], local["cache"]);
-        assert!(
-            merge_value(Some(&base), None, Some(&remote), None, &key, &mut conflicts).is_none()
+        assert_eq!(
+            merge_value(Some(&base), None, Some(&remote), None, &key, &mut conflicts),
+            Some(remote)
         );
-        assert!(merge_value(Some(&base), Some(&local), None, None, &key, &mut conflicts).is_none());
+        assert_eq!(
+            merge_value(Some(&base), Some(&local), None, None, &key, &mut conflicts),
+            Some(local)
+        );
         assert!(conflicts.is_empty());
+    }
+    #[test]
+    fn missing_accounts_on_either_side_are_restored_only_after_review() {
+        let config = DavConfig::default();
+        let account = StoredAccount::new_api_key("Keep account".into(), "synthetic-key".into());
+        let baseline = Snapshot {
+            version: 1,
+            accounts: fields(json!({"a": account_value(&account, false).unwrap()})),
+            settings: None,
+        };
+        let missing = Snapshot {
+            accounts: Some(Fields::new()),
+            ..baseline.clone()
+        };
+        for (local, remote) in [(&missing, &baseline), (&baseline, &missing)] {
+            let options = SyncOptions::default();
+            let (merged, conflicts, details) =
+                merged_snapshot(&config, &baseline, local, remote, &options).unwrap();
+            assert!(conflicts.is_empty() && details.is_empty());
+            assert_eq!(merged.accounts, baseline.accounts);
+            let plan = preview(
+                &config,
+                &baseline,
+                local,
+                remote,
+                &merged,
+                false,
+                Some("\"v1\""),
+                &options,
+                details,
+            )
+            .unwrap();
+            assert_eq!(plan.restored_accounts, vec!["Keep account"]);
+            assert!(requires_review(&plan));
+            assert!(!confirmed(&plan, &options));
+            assert!(plan.to_local.deleted.is_empty() && plan.to_cloud.deleted.is_empty());
+            assert_eq!(plan.to_local.added.len() + plan.to_cloud.added.len(), 1);
+        }
     }
     #[test]
     fn cache_remaps_to_each_devices_uuid_and_restores_subscription_expiry() {
@@ -1990,6 +2032,24 @@ mod tests {
         assert_eq!(
             merge(local.clone(), local.clone(), remote.clone(), Some("remote")).0,
             local
+        );
+    }
+    #[test]
+    fn account_timestamp_selects_a_whole_copy_and_equal_times_require_a_choice() {
+        let local = json!({"a":{"name":"Local", "hidden":false, "updated_at":"2026-10-22T12:00:00Z", "credentials":{"auth_data":"local", "updated_at":"2026-10-20T12:00:00Z"}}});
+        let remote = json!({"a":{"name":"Remote", "hidden":true, "updated_at":"2026-10-21T12:00:00Z", "credentials":{"auth_data":"remote", "updated_at":"2026-10-21T12:00:00Z"}}});
+        let (merged, conflicts) = merge(json!({}), local.clone(), remote.clone(), Some("remote"));
+        assert!(conflicts.is_empty());
+        assert_eq!(merged, local);
+        let mut equal_time = remote;
+        equal_time["a"]["updated_at"] = local["a"]["updated_at"].clone();
+        assert_eq!(
+            merge(json!({}), local.clone(), equal_time.clone(), None).1,
+            vec!["a"]
+        );
+        assert_eq!(
+            merge(json!({}), local, equal_time.clone(), Some("remote")).0,
+            equal_time
         );
     }
     #[test]

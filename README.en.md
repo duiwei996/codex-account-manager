@@ -69,7 +69,7 @@ Root `VERSION` is the single version source. Local builds never increment it; cl
 
 After editing `VERSION`, run `pnpm version:sync` to synchronize frontend, Tauri and Cargo metadata, or use `pnpm version:bump 1.0.5` to update all version files explicitly. `pnpm version:check` and build entry points verify consistency. Choose an unused version before releasing; existing drafts are also reserved and their artifacts are not overwritten.
 
-Before pushing a release, install `cargo-audit 0.22.1` and run `pnpm release:preflight` to check versions, Rust formatting and both dependency security audits against current advisories. Set `CARGO_AUDIT_BIN` to use an official prebuilt auditor. Behavior tests, compilation and cloud platform checks remain separate. Legacy ZIP extraction is disabled in the updater; releases use raw EXE/MSI, AppImage and macOS tar.gz packages.
+Before pushing, install `cargo-audit 0.22.1` and run `pnpm check:ci` to check versions, Rust formatting, both dependency security audits, the frontend build and tests, and Rust tests on the current host. Any failure stops the checks. Audits use current advisories, so previously passing lockfiles must be checked again. Set `CARGO_AUDIT_BIN` to use an official prebuilt auditor. Use `pnpm release:preflight` for formatting and security checks only. Local checks do not replace CI on other operating systems; `pnpm build:local` creates an installer without certifying that CI passes. Legacy ZIP extraction is disabled in the updater; releases use raw EXE/MSI, AppImage and macOS tar.gz packages.
 
 ## License
 

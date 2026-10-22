@@ -10,14 +10,18 @@ Object.assign(globalThis, { window: dom.window, document: dom.window.document, l
 const calls = [];
 let saved = { server: "https://example.com/dav/", username: "public-test", directory: "/", sync_accounts: true, sync_settings: true, auto_sync: false };
 const emptyChanges = () => ({ added: [], updated: [], deleted: [], settings: [] });
-const plan = (overrides = {}) => ({ mode: "merge", choice: null, token: "preview-v1", first_sync: false, cloud_missing: false, local_accounts: 1, cloud_accounts: 2, to_local: emptyChanges(), to_cloud: emptyChanges(), conflicts: [], ...overrides });
+const plan = (overrides = {}) => ({ mode: "merge", choice: null, token: "preview-v1", first_sync: false, cloud_missing: false, local_accounts: 1, cloud_accounts: 2, to_local: emptyChanges(), to_cloud: emptyChanges(), restored_accounts: [], conflicts: [], ...overrides });
 const completed = (overrides = {}) => ({ conflicts: [], bytes: 321, uploaded: true, synced_at: "2026-10-16T01:00:00Z", ui: null, needs_confirmation: false, preview: plan(), recovery_path: null, ...overrides });
 let syncReply = completed();
 let listedAccounts = [];
+let configError = null;
 window.__TAURI_INTERNALS__ = {
   async invoke(command, args = {}) {
     calls.push({ command, args });
-    if (command === "get_webdav_config") return { config: { ...saved }, password_saved: true };
+    if (command === "get_webdav_config") {
+      if (configError) throw configError;
+      return { config: { ...saved }, password_saved: true };
+    }
     if (command === "save_webdav_config") { saved = { ...args.config }; return { config: { ...saved }, password_saved: true }; }
     if (command === "list_webdav_directories") return args.directory === "/" ? [{ name: "中文 & folder", path: "/中文 & folder/" }] : [];
     if (command === "sync_webdav") return typeof syncReply === "function" ? syncReply(args) : syncReply;
@@ -111,6 +115,58 @@ test("first sync previews upload and download separately without applying settin
   assert.equal(calls.filter(c => c.command === "sync_webdav").length, count);
   assert.equal(service.davState.paused, true);
   assert.equal(document.querySelector('[aria-label="同步预览"]'), null);
+});
+
+test("restoring a one-sided missing account requires a preview and confirmation", async () => {
+  await act(async () => service.resumeDavSync());
+  syncReply = completed();
+  await mount();
+  syncReply = completed({ needs_confirmation: true, synced_at: "", preview: plan({ restored_accounts: ["保留账号"], to_local: { ...emptyChanges(), added: ["保留账号"] } }) });
+  await click("双向同步");
+  assert.match(document.querySelector('[aria-label="同步预览"]').textContent, /保留账号/);
+  assert.match(document.body.textContent, /确认后会补回缺失的一边/);
+  assert.equal(service.davState.paused, true);
+  assert.equal(button("确认双向同步").disabled, false);
+  syncReply = completed();
+  await click("确认双向同步");
+  assert.equal(calls.filter(c => c.command === "sync_webdav").at(-1).args.confirmation, "preview-v1");
+  assert.equal(service.davState.paused, false);
+});
+
+test("automatic sync retries both configuration and sync failures on the next scheduled check", async () => {
+  const timers = { timeout: window.setTimeout, interval: window.setInterval };
+  let initial, nextCheck, dispose;
+  window.setTimeout = callback => { initial = callback; return -1; };
+  window.setInterval = callback => { nextCheck = callback; return -2; };
+  try {
+    for (const failure of ["sync", "config"]) {
+      await act(async () => service.resumeDavSync());
+      saved = { ...saved, auto_sync: true };
+      configError = failure === "config" ? new Error("temporary configuration failure") : null;
+      syncReply = () => { throw new Error("temporary sync failure"); };
+      dispose = service.startDavAutoSync();
+      await act(async () => initial());
+      await settle();
+      assert.match(service.davState.error, /temporary/);
+      assert.equal(service.davState.paused, false);
+      const attempts = calls.filter(c => c.command === "sync_webdav").length;
+      configError = null;
+      syncReply = completed();
+      await act(async () => nextCheck());
+      await settle();
+      assert.equal(calls.filter(c => c.command === "sync_webdav").length, attempts + 1);
+      assert.equal(service.davState.error, "");
+      assert.equal(service.davState.paused, false);
+      dispose();
+      dispose = null;
+    }
+  } finally {
+    dispose?.();
+    window.setTimeout = timers.timeout;
+    window.setInterval = timers.interval;
+    configError = null;
+    saved = { ...saved, auto_sync: false };
+  }
 });
 
 test("one-way replacements are secondary actions with scoped deletion preview and recovery result", async () => {

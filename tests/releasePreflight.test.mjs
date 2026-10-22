@@ -27,3 +27,23 @@ test("missing package-manager context and a mismatched auditor fail before check
   assert.throws(() => releasePreflight({ run() { throw new Error("must not run"); } }), /pinned package manager/);
   assert.throws(() => releasePreflight({ pnpmScript: "pnpm.cjs", run() { return "cargo-audit 0.21.0"; } }), /Expected cargo-audit 0.22.1/);
 });
+
+test("full CI checking includes compilation and both test suites and stops on failure", () => {
+  const checks = [];
+  releasePreflight({ pnpmScript: "pinned-pnpm.cjs", full: true, run(command, args) {
+    checks.push([command, args]);
+    return "cargo-audit 0.22.1";
+  } });
+  assert.deepEqual(checks.slice(-3), [
+    [process.execPath, ["pinned-pnpm.cjs", "build"]],
+    [process.execPath, ["pinned-pnpm.cjs", "test"]],
+    ["cargo", ["test", "--locked", "--manifest-path", "src-tauri/Cargo.toml"]],
+  ]);
+  let rustTestsStarted = false;
+  assert.throws(() => releasePreflight({ pnpmScript: "pinned-pnpm.cjs", full: true, run(command, args) {
+    if (command === "cargo" && args[0] === "test") rustTestsStarted = true;
+    if (command === process.execPath && args[1] === "test") throw new Error("frontend test failed");
+    return "cargo-audit 0.22.1";
+  } }), /frontend test failed/);
+  assert.equal(rustTestsStarted, false);
+});

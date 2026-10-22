@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "node scripts/project-version.mjs --check && tsc && vite build",
     "build:local": "node scripts/build-local.mjs",
+    "check:ci": "node scripts/release-preflight.mjs --full",
     "test:desktop-reopen": "node --experimental-strip-types --test tests/desktopReopen.test.ts",
     "test:browser-runtime": "node --experimental-strip-types --test tests/browserRuntime.test.ts",
     "test:reset-credits": "node --experimental-strip-types --test tests/resetCredits.test.ts",
