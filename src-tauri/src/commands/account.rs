@@ -206,6 +206,10 @@ async fn switch_account_with_policy(
         super::reopen_closed_codex_desktop(token)
             .await
             .map_err(|error| format!("Account switched, but reopening Codex failed: {error}"))?;
+    } else if restart {
+        // A restart should also start Codex when there was no running desktop
+        // instance to capture and reopen.
+        super::open_codex_app().await?;
     }
 
     Ok(())

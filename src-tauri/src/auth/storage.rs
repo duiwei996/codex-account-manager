@@ -1,5 +1,6 @@
 //! Account storage module - manages reading and writing accounts.json
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::path::PathBuf;
 
@@ -9,6 +10,15 @@ use chrono::{DateTime, Utc};
 use crate::types::{
     parse_chatgpt_id_token_claims, AccountsStore, AppSettings, AuthData, AuthDotJson, StoredAccount,
 };
+
+fn mark_sync_updated(account: &mut StoredAccount, at: DateTime<Utc>) {
+    if account
+        .sync_updated_at
+        .is_none_or(|timestamp| at > timestamp)
+    {
+        account.sync_updated_at = Some(at);
+    }
+}
 
 pub fn sync_active_account_tokens(store: &mut AccountsStore, auth: &AuthDotJson) -> bool {
     let Some(active_id) = store.active_account_id.as_deref() else {
@@ -68,6 +78,7 @@ pub fn sync_active_account_tokens(store: &mut AccountsStore, auth: &AuthDotJson)
     refresh_token.clone_from(&tokens.refresh_token);
     *account_id = Some(current_account_id);
     account.credentials_updated_at = auth.last_refresh;
+    mark_sync_updated(account, auth.last_refresh.unwrap_or_else(Utc::now));
     true
 }
 
@@ -277,6 +288,7 @@ fn normalize_generated_names(store: &mut AccountsStore) -> bool {
             let name = unique_display_name(store, account, email);
             if name != account.name {
                 store.accounts[index].name = name;
+                mark_sync_updated(&mut store.accounts[index], Utc::now());
                 changed = true;
             }
         }
@@ -305,14 +317,23 @@ pub(crate) fn upsert_account(
         })
         .cloned();
     if let Some(existing) = existing {
+        let email_changed = account.email != existing.email;
+        let plan_changed = account.plan_type != existing.plan_type;
+        let credential_time = account.credentials_updated_at.unwrap_or_else(Utc::now);
         account.id = existing.id.clone();
         account.name = existing.name;
         account.created_at = existing.created_at;
         account.last_used_at = existing.last_used_at;
+        account.sync_updated_at = existing.sync_updated_at;
         account.subscription_expires_at = account
             .subscription_expires_at
             .or(existing.subscription_expires_at);
-        account.credentials_updated_at = account.credentials_updated_at.or(Some(Utc::now()));
+        account.credentials_updated_at = Some(credential_time);
+        mark_sync_updated(&mut account, credential_time);
+        let metadata_time = Utc::now();
+        if email_changed || plan_changed {
+            mark_sync_updated(&mut account, metadata_time);
+        }
         store
             .accounts
             .retain(|entry| entry.id == account.id || !same_account_type(entry, &account));
@@ -547,12 +568,13 @@ pub fn update_account_metadata(
             .iter()
             .find(|a| a.id == account_id)
             .context("Account not found")?;
+        let original_name = target.name.clone();
         let mut updated = target.clone();
         if let Some(ref plan) = plan_type {
             updated.plan_type = Some(plan.clone());
         }
         let updated_name =
-            unique_display_name(store, &updated, name.as_deref().unwrap_or(&target.name));
+            unique_display_name(store, &updated, name.as_deref().unwrap_or(&original_name));
 
         // Now find and update the account
         let account = store
@@ -562,23 +584,32 @@ pub fn update_account_metadata(
             .context("Account not found")?;
 
         account.name = updated_name;
+        let now = Utc::now();
+        let mut sync_changed = account.name != original_name;
 
         if let Some(new_email) = email {
             if account.email.as_ref() != Some(&new_email) {
                 account.email = Some(new_email);
+                sync_changed = true;
             }
         }
 
         if let Some(new_plan_type) = plan_type {
             if account.plan_type.as_ref() != Some(&new_plan_type) {
                 account.plan_type = Some(new_plan_type);
+                sync_changed = true;
             }
         }
 
         if let Some(subscription_expires_at) = subscription_expires_at {
             if account.subscription_expires_at != subscription_expires_at {
                 account.subscription_expires_at = subscription_expires_at;
+                sync_changed = true;
             }
+        }
+
+        if sync_changed {
+            mark_sync_updated(account, now);
         }
 
         let updated = account.clone();
@@ -635,7 +666,9 @@ pub fn update_account_chatgpt_tokens(
             account.subscription_expires_at = Some(subscription_expires_at);
         }
 
-        account.credentials_updated_at = Some(chrono::Utc::now());
+        let now = chrono::Utc::now();
+        account.credentials_updated_at = Some(now);
+        mark_sync_updated(account, now);
         let updated = account.clone();
 
         Ok(updated)
@@ -651,12 +684,18 @@ pub fn get_masked_account_ids() -> Result<Vec<String>> {
 /// Set the list of masked account IDs
 pub fn set_masked_account_ids(ids: Vec<String>) -> Result<()> {
     update_accounts(|store| {
-        store.masked_account_ids = ids
+        let next: BTreeSet<String> = ids
             .into_iter()
             .filter(|id| store.accounts.iter().any(|a| &a.id == id))
             .collect();
-        store.masked_account_ids.sort();
-        store.masked_account_ids.dedup();
+        let previous: BTreeSet<String> = store.masked_account_ids.iter().cloned().collect();
+        let now = Utc::now();
+        for account in &mut store.accounts {
+            if previous.contains(&account.id) != next.contains(&account.id) {
+                mark_sync_updated(account, now);
+            }
+        }
+        store.masked_account_ids = next.into_iter().collect();
 
         Ok(())
     })

@@ -399,9 +399,14 @@ fn account_key(account: &StoredAccount) -> String {
     hash(identity.as_bytes())
 }
 fn account_value(account: &StoredAccount, hidden: bool) -> Result<Value> {
+    let updated_at = account
+        .sync_updated_at
+        .or(account.credentials_updated_at)
+        .unwrap_or(account.created_at);
     Ok(
         json!({"name":account.name, "email":account.email, "plan_type":account.plan_type, "auth_mode":account.auth_mode,
-        "credentials":{"auth_data":account.auth_data,"updated_at":account.credentials_updated_at}, "hidden":hidden}),
+        "credentials":{"auth_data":account.auth_data,"updated_at":account.credentials_updated_at}, "hidden":hidden,
+        "updated_at":updated_at}),
     )
 }
 fn restore_account(value: &Value, old: Option<&StoredAccount>) -> Result<StoredAccount> {
@@ -411,6 +416,12 @@ fn restore_account(value: &Value, old: Option<&StoredAccount>) -> Result<StoredA
         .context("Missing sync credentials")?;
     data.remove("hidden");
     data.remove("cache");
+    data.remove("updated_at");
+    data.remove("field_updated_at");
+    data.insert(
+        "sync_updated_at".into(),
+        value.get("updated_at").cloned().unwrap_or(Value::Null),
+    );
     data.insert("auth_data".into(), credentials["auth_data"].clone());
     data.insert(
         "credentials_updated_at".into(),
@@ -646,27 +657,107 @@ fn merge_value(
     path: &str,
     conflicts: &mut Vec<String>,
 ) -> Option<Value> {
-    // Cached observations do not turn an account deletion into an edit conflict.
+    // An account missing on one side is retained from the side that still has it.
+    // Absence alone cannot tell whether the deletion was intentional or accidental.
     let account = [base, local, remote]
         .into_iter()
         .flatten()
-        .any(|v| v.get("credentials").is_some());
+        .any(|value| value.get("credentials").is_some());
     if account {
-        let strip = |v: Option<&Value>| v.map(quota_cache::without_cache);
-        let (b, l, r) = (strip(base), strip(local), strip(remote));
-        let mut result = merge_core(b.as_ref(), l.as_ref(), r.as_ref(), choice, path, conflicts);
-        if let Some(Value::Object(map)) = result.as_mut() {
-            if let Some(cache) = quota_cache::merged_value(
-                local.and_then(|v| v.get("cache")),
-                remote.and_then(|v| v.get("cache")),
-            ) {
-                map.insert("cache".into(), cache);
+        return match (local, remote) {
+            (None, None) => None,
+            (Some(value), None) | (None, Some(value)) => {
+                finish_account_merge(value.clone(), local, remote)
             }
-        }
-        return result;
+            (Some(local), Some(remote)) => {
+                let local_content = comparable_account_data(local);
+                let remote_content = comparable_account_data(remote);
+                if local_content == remote_content {
+                    let winner = match account_timestamp_order(local, remote) {
+                        Some(std::cmp::Ordering::Greater) => local,
+                        Some(std::cmp::Ordering::Less) => remote,
+                        Some(std::cmp::Ordering::Equal) => local,
+                        None if account_timestamp(local).is_some() => local,
+                        None => remote,
+                    };
+                    return finish_account_merge(winner.clone(), Some(local), Some(remote));
+                }
+
+                let winner = match account_timestamp_order(local, remote) {
+                    Some(std::cmp::Ordering::Greater) => Some(local),
+                    Some(std::cmp::Ordering::Less) => Some(remote),
+                    Some(std::cmp::Ordering::Equal) | None => match choice {
+                        Some("local") => Some(local),
+                        Some("remote") => Some(remote),
+                        _ => None,
+                    },
+                };
+                if winner.is_none() && conflicts.len() < 30 {
+                    conflicts.push(path.to_string());
+                }
+                finish_account_merge(winner.unwrap_or(local).clone(), Some(local), Some(remote))
+            }
+        };
     }
     merge_core(base, local, remote, choice, path, conflicts)
 }
+
+fn timestamp_order(left: &Value, right: &Value) -> Option<std::cmp::Ordering> {
+    match (left, right) {
+        (Value::String(left), Value::String(right)) => {
+            let left = chrono::DateTime::parse_from_rfc3339(left).ok()?;
+            let right = chrono::DateTime::parse_from_rfc3339(right).ok()?;
+            Some(left.cmp(&right))
+        }
+        (Value::Number(left), Value::Number(right)) => Some(left.as_i64()?.cmp(&right.as_i64()?)),
+        _ => None,
+    }
+}
+
+fn account_timestamp(account: &Value) -> Option<Value> {
+    account
+        .get("updated_at")
+        .filter(|value| !value.is_null())
+        .cloned()
+        .or_else(|| {
+            account
+                .get("credentials")
+                .and_then(|value| value.get("updated_at"))
+                .filter(|value| !value.is_null())
+                .cloned()
+        })
+}
+
+fn account_timestamp_order(local: &Value, remote: &Value) -> Option<std::cmp::Ordering> {
+    timestamp_order(&account_timestamp(local)?, &account_timestamp(remote)?)
+}
+
+fn comparable_account_data(value: &Value) -> Value {
+    let mut comparable = quota_cache::without_cache(value);
+    if let Value::Object(fields) = &mut comparable {
+        fields.remove("updated_at");
+        fields.remove("field_updated_at");
+    }
+    comparable
+}
+
+fn finish_account_merge(
+    mut result: Value,
+    local: Option<&Value>,
+    remote: Option<&Value>,
+) -> Option<Value> {
+    if let Value::Object(map) = &mut result {
+        map.remove("field_updated_at");
+        if let Some(cache) = quota_cache::merged_value(
+            local.and_then(|value| value.get("cache")),
+            remote.and_then(|value| value.get("cache")),
+        ) {
+            map.insert("cache".into(), cache);
+        }
+    }
+    Some(result)
+}
+
 fn merge_core(
     base: Option<&Value>,
     local: Option<&Value>,
@@ -681,17 +772,7 @@ fn merge_core(
     if !recurse_objects && (local == remote || remote == base) {
         return local.cloned();
     }
-    // An older cloud token must never silently replace a newer local token.
-    let credentials_rollback = path == "credentials"
-        && local.zip(remote).is_some_and(|(l, r)| {
-            let time = |v: &Value| {
-                v.get("updated_at")
-                    .and_then(Value::as_str)
-                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-            };
-            time(l).is_some_and(|lt| time(r).is_some_and(|rt| rt < lt))
-        });
-    if local == base && !credentials_rollback && !recurse_objects {
+    if local == base && !recurse_objects {
         return remote.cloned();
     }
     if path != "credentials" {
@@ -836,6 +917,7 @@ struct SyncPreview {
     cloud_accounts: usize,
     to_local: Changes,
     to_cloud: Changes,
+    restored_accounts: Vec<String>,
     conflicts: Vec<ConflictInfo>,
 }
 #[derive(Serialize)]
@@ -862,7 +944,7 @@ fn changes(before: &Snapshot, after: &Snapshot, config: &DavConfig) -> Changes {
             match b.get(key) {
                 None => result.added.push(name),
                 Some(old) => {
-                    if quota_cache::without_cache(old) != quota_cache::without_cache(value) {
+                    if comparable_account_data(old) != comparable_account_data(value) {
                         result.updated.push(name.clone());
                     }
                     if old.get("cache") != value.get("cache") {
@@ -1000,6 +1082,29 @@ fn preview(
     options: &SyncOptions,
     conflicts: Vec<ConflictInfo>,
 ) -> Result<SyncPreview> {
+    let restored_accounts = if options.mode == SyncMode::Merge && config.sync_accounts {
+        let empty = Fields::new();
+        let baseline_accounts = baseline.accounts.as_ref().unwrap_or(&empty);
+        let local_accounts = local.accounts.as_ref().unwrap_or(&empty);
+        let remote_accounts = remote.accounts.as_ref().unwrap_or(&empty);
+        let merged_accounts = merged.accounts.as_ref().unwrap_or(&empty);
+        baseline_accounts
+            .keys()
+            .filter(|key| {
+                local_accounts.contains_key(*key) != remote_accounts.contains_key(*key)
+                    && merged_accounts.contains_key(*key)
+            })
+            .filter_map(|key| {
+                merged_accounts
+                    .get(key)
+                    .and_then(|account| account.get("name"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let token = hash(&serde_json::to_vec(
         &json!({"config":config,"local":core_snapshot(local),"remote":remote,"baseline":core_snapshot(baseline),"merged":core_snapshot(merged),"etag":etag,"mode":options.mode,"choice":options.choice,"missing":missing}),
     )?);
@@ -1018,6 +1123,7 @@ fn preview(
         } else {
             changes(remote, merged, config)
         },
+        restored_accounts,
         conflicts,
     })
 }
@@ -1026,6 +1132,7 @@ fn requires_review(plan: &SyncPreview) -> bool {
         || plan.mode != SyncMode::Merge
         || !plan.to_local.deleted.is_empty()
         || !plan.to_cloud.deleted.is_empty()
+        || !plan.restored_accounts.is_empty()
         || !plan.conflicts.is_empty()
 }
 fn confirmed(plan: &SyncPreview, options: &SyncOptions) -> bool {
@@ -1746,9 +1853,9 @@ mod tests {
         let remote = snapshot("Account A", "synthetic-cloud");
         let (_, conflicts, details) =
             merged_snapshot(&config, &base, &local, &remote, &SyncOptions::default()).unwrap();
-        assert_eq!(conflicts, vec!["credentials"]);
+        assert_eq!(conflicts, vec!["account-key"]);
         assert_eq!(details[0].account.as_deref(), Some("Account A"));
-        assert_eq!(details[0].field, "credentials");
+        assert_eq!(details[0].field, "account");
         assert!(!serde_json::to_string(&details)
             .unwrap()
             .contains("synthetic"));
@@ -1874,16 +1981,15 @@ mod tests {
         assert!(conflicts.is_empty());
     }
     #[test]
-    fn old_cloud_credentials_do_not_silently_replace_newer_local_credentials() {
+    fn newer_account_timestamp_wins_even_if_a_choice_is_supplied() {
         let local = json!({"account":{"credentials":{"auth_data":"new","updated_at":"2026-10-16T10:00:00Z"}}});
         let remote = json!({"account":{"credentials":{"auth_data":"old","updated_at":"2026-10-15T10:00:00Z"}}});
-        assert_eq!(
-            merge(local.clone(), local.clone(), remote.clone(), None).1,
-            vec!["credentials"]
-        );
+        let (merged, conflicts) = merge(local.clone(), local.clone(), remote.clone(), None);
+        assert!(conflicts.is_empty());
+        assert_eq!(merged, local);
         assert_eq!(
             merge(local.clone(), local.clone(), remote.clone(), Some("remote")).0,
-            remote
+            local
         );
     }
     #[test]

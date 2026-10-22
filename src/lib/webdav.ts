@@ -16,7 +16,7 @@ export interface SyncChanges { added: string[]; updated: string[]; deleted: stri
 export interface SyncPreview {
   mode: SyncMode; choice: "local" | "remote" | null; token: string; first_sync: boolean; cloud_missing: boolean;
   local_accounts: number; cloud_accounts: number; to_local: SyncChanges; to_cloud: SyncChanges;
-  conflicts: { account: string | null; field: string }[];
+  restored_accounts: string[]; conflicts: { account: string | null; field: string }[];
 }
 export interface SyncResult { conflicts: string[]; bytes: number; uploaded: boolean; synced_at: string; ui: Record<string, unknown> | null; needs_confirmation: boolean; preview: SyncPreview; recovery_path: string | null; account_caches?:Record<string,AccountSyncCache> | null }
 export interface SyncOptions { choice?: "local" | "remote"; mode?: SyncMode; confirmation?: string; automatic?: boolean }
@@ -62,8 +62,7 @@ export async function runDavSync(options: SyncOptions = {}) {
     }
   } catch (error) {
     davState.error = String(error);
-    // A failure requires a manual retry; never keep hammering a server or expired credentials.
-    davState.paused = true;
+    // Keep automatic sync active; the one-minute timer retries errors.
   } finally { davState.busy = false; notify(); }
 }
 export function resumeDavSync() { davState.paused = false; davState.error = ""; davState.result = null; notify(); }
@@ -78,7 +77,7 @@ export function startDavAutoSync() {
     try {
       const { config } = await invokeBackend<ConfigView>("get_webdav_config");
       if (!disposed && config.auto_sync && config.server && (config.sync_accounts || config.sync_settings)) await runDavSync({ automatic: true });
-    } catch (error) { davState.error = String(error); davState.paused = true; notify(); }
+    } catch (error) { davState.error = String(error); notify(); }
     finally { checking = false; }
   };
   const initial = window.setTimeout(() => void tick(), 3000);

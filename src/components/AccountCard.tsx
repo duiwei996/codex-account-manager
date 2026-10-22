@@ -343,7 +343,7 @@ export function AccountCard({
         <section className="min-w-0 rounded-xl bg-gray-50 p-3 dark:bg-gray-950/40">
           <h4 className="mb-3 text-xs font-medium text-gray-500 dark:text-gray-400">{locale === "zh-CN" ? "账号额度" : "Allowance"}</h4>
           <UsageBar usage={account.usage} loading={isRefreshing || account.usageLoading} />
-          {account.usage?.error && <button onClick={() => void handleRefresh().catch(() => {})} disabled={isRefreshing || account.usageLoading} className="mt-2 text-xs font-medium text-blue-600 hover:underline disabled:opacity-50 dark:text-blue-400">{t("Retry")}</button>}
+          {account.usage?.error && !account.credentials_invalid && <button onClick={() => void handleRefresh().catch(() => {})} disabled={isRefreshing || account.usageLoading} className="mt-2 text-xs font-medium text-blue-600 hover:underline disabled:opacity-50 dark:text-blue-400">{t("Retry")}</button>}
         </section>
         {account.is_active && (
           <section className="min-w-0 rounded-xl bg-gray-50 p-3 dark:bg-gray-950/40">

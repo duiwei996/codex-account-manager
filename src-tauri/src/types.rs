@@ -153,6 +153,9 @@ pub struct StoredAccount {
     /// Prevent older auth.json credentials from overwriting a newly rotated refresh token.
     #[serde(default)]
     pub credentials_updated_at: Option<DateTime<Utc>>,
+    /// Last modification time for syncable account data.
+    #[serde(default)]
+    pub sync_updated_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub credentials_invalid: bool,
 }
@@ -186,6 +189,7 @@ impl StoredAccount {
 
     /// Create a new account with API key authentication
     pub fn new_api_key(name: String, api_key: String) -> Self {
+        let created_at = Utc::now();
         Self {
             id: Uuid::new_v4().to_string(),
             name: Self::resolved_name(name, None, None, "API key"),
@@ -194,9 +198,10 @@ impl StoredAccount {
             subscription_expires_at: None,
             auth_mode: AuthMode::ApiKey,
             auth_data: AuthData::ApiKey { key: api_key },
-            created_at: Utc::now(),
+            created_at,
             last_used_at: None,
             credentials_updated_at: None,
+            sync_updated_at: Some(created_at),
             credentials_invalid: false,
         }
     }
@@ -213,6 +218,7 @@ impl StoredAccount {
         account_id: Option<String>,
     ) -> Self {
         let name = Self::resolved_name(name, email.as_ref(), account_id.as_ref(), "ChatGPT");
+        let created_at = Utc::now();
         Self {
             id: Uuid::new_v4().to_string(),
             name,
@@ -226,9 +232,10 @@ impl StoredAccount {
                 refresh_token,
                 account_id,
             },
-            created_at: Utc::now(),
+            created_at,
             last_used_at: None,
             credentials_updated_at: None,
+            sync_updated_at: Some(created_at),
             credentials_invalid: false,
         }
     }
