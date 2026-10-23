@@ -320,6 +320,7 @@ pub(crate) fn upsert_account(
         let email_changed = account.email != existing.email;
         let plan_changed = account.plan_type != existing.plan_type;
         let credential_time = account.credentials_updated_at.unwrap_or_else(Utc::now);
+        account.risk_controlled = existing.risk_controlled;
         account.id = existing.id.clone();
         account.name = existing.name;
         account.created_at = existing.created_at;

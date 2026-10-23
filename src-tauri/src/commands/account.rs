@@ -256,3 +256,21 @@ pub async fn get_masked_account_ids() -> Result<Vec<String>, String> {
 pub async fn set_masked_account_ids(ids: Vec<String>) -> Result<(), String> {
     crate::auth::storage::set_masked_account_ids(ids).map_err(|e| e.to_string())
 }
+
+#[tauri::command]
+pub async fn set_account_risk_control(
+    account_id: String,
+    risk_controlled: bool,
+) -> Result<(), String> {
+    update_accounts(|store| {
+        let account = store
+            .accounts
+            .iter_mut()
+            .find(|a| a.id == account_id)
+            .ok_or_else(|| anyhow::anyhow!("Account not found"))?;
+        account.risk_controlled = risk_controlled;
+        account.sync_updated_at = Some(chrono::Utc::now());
+        Ok(())
+    })
+    .map_err(|e| e.to_string())
+}

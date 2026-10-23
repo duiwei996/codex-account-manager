@@ -101,6 +101,7 @@ pub fn run() {
             commands::reopen_closed_codex_desktop,
             // Account management
             list_accounts,
+            commands::set_account_risk_control,
             get_active_account_info,
             add_account_from_file,
             switch_account,

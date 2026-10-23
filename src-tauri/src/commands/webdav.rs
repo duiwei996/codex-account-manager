@@ -32,6 +32,7 @@ pub struct DavConfig {
     pub sync_accounts: bool,
     pub sync_settings: bool,
     pub auto_sync: bool,
+    pub auto_sync_interval_minutes: u64,
 }
 impl Default for DavConfig {
     fn default() -> Self {
@@ -42,6 +43,7 @@ impl Default for DavConfig {
             sync_accounts: true,
             sync_settings: true,
             auto_sync: false,
+            auto_sync_interval_minutes: 30,
         }
     }
 }
@@ -230,6 +232,9 @@ pub async fn save_webdav_config(
                     )
                 })?;
         }
+        if !(1..=1440).contains(&config.auto_sync_interval_minutes) {
+            bail!("自动同步间隔须为 1–1440 分钟 / Sync interval must be 1–1440 minutes");
+        }
         let _password = password_for(&config, None)?;
         auth::secure_file::atomic_write(&config_file()?, &serde_json::to_vec(&config)?)?;
         Ok(ConfigView {
@@ -342,6 +347,8 @@ pub async fn list_webdav_directories(
 struct Snapshot {
     version: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    updated_at: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     accounts: Option<Fields>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     settings: Option<Fields>,
@@ -349,6 +356,7 @@ struct Snapshot {
 fn empty_snapshot() -> Snapshot {
     Snapshot {
         version: 1,
+        updated_at: None,
         ..Default::default()
     }
 }
@@ -406,6 +414,7 @@ fn account_value(account: &StoredAccount, hidden: bool) -> Result<Value> {
     Ok(
         json!({"name":account.name, "email":account.email, "plan_type":account.plan_type, "auth_mode":account.auth_mode,
         "credentials":{"auth_data":account.auth_data,"updated_at":account.credentials_updated_at}, "hidden":hidden,
+        "risk_controlled":account.risk_controlled,
         "updated_at":updated_at}),
     )
 }
@@ -415,6 +424,8 @@ fn restore_account(value: &Value, old: Option<&StoredAccount>) -> Result<StoredA
         .remove("credentials")
         .context("Missing sync credentials")?;
     data.remove("hidden");
+    data.entry("risk_controlled")
+        .or_insert_with(|| json!(old.is_some_and(|a| a.risk_controlled)));
     data.remove("cache");
     data.remove("updated_at");
     data.remove("field_updated_at");
@@ -578,6 +589,7 @@ fn capture(
     };
     Ok(Snapshot {
         version: 1,
+        updated_at: None,
         accounts,
         settings: if config.sync_settings {
             Some(settings_fields(settings, ui)?)
@@ -648,187 +660,58 @@ fn remap_caches(
     }
     Ok(result)
 }
-// Missing entries are deletions relative to the last successful sync, without unbounded tombstones.
-fn merge_value(
-    base: Option<&Value>,
-    local: Option<&Value>,
-    remote: Option<&Value>,
-    choice: Option<&str>,
-    path: &str,
-    conflicts: &mut Vec<String>,
-) -> Option<Value> {
-    // An account missing on one side is retained from the side that still has it.
-    // Absence alone cannot tell whether the deletion was intentional or accidental.
-    let account = [base, local, remote]
-        .into_iter()
-        .flatten()
-        .any(|value| value.get("credentials").is_some());
-    if account {
-        return match (local, remote) {
-            (None, None) => None,
-            (Some(value), None) | (None, Some(value)) => {
-                finish_account_merge(value.clone(), local, remote)
-            }
-            (Some(local), Some(remote)) => {
-                let local_content = comparable_account_data(local);
-                let remote_content = comparable_account_data(remote);
-                if local_content == remote_content {
-                    let winner = match account_timestamp_order(local, remote) {
-                        Some(std::cmp::Ordering::Greater) => local,
-                        Some(std::cmp::Ordering::Less) => remote,
-                        Some(std::cmp::Ordering::Equal) => local,
-                        None if account_timestamp(local).is_some() => local,
-                        None => remote,
-                    };
-                    return finish_account_merge(winner.clone(), Some(local), Some(remote));
-                }
-
-                let winner = match account_timestamp_order(local, remote) {
-                    Some(std::cmp::Ordering::Greater) => Some(local),
-                    Some(std::cmp::Ordering::Less) => Some(remote),
-                    Some(std::cmp::Ordering::Equal) | None => match choice {
-                        Some("local") => Some(local),
-                        Some("remote") => Some(remote),
-                        _ => None,
-                    },
-                };
-                if winner.is_none() && conflicts.len() < 30 {
-                    conflicts.push(path.to_string());
-                }
-                finish_account_merge(winner.unwrap_or(local).clone(), Some(local), Some(remote))
-            }
-        };
-    }
-    merge_core(base, local, remote, choice, path, conflicts)
-}
-
-fn timestamp_order(left: &Value, right: &Value) -> Option<std::cmp::Ordering> {
-    match (left, right) {
-        (Value::String(left), Value::String(right)) => {
-            let left = chrono::DateTime::parse_from_rfc3339(left).ok()?;
-            let right = chrono::DateTime::parse_from_rfc3339(right).ok()?;
-            Some(left.cmp(&right))
-        }
-        (Value::Number(left), Value::Number(right)) => Some(left.as_i64()?.cmp(&right.as_i64()?)),
-        _ => None,
-    }
-}
-
-fn account_timestamp(account: &Value) -> Option<Value> {
-    account
-        .get("updated_at")
-        .filter(|value| !value.is_null())
-        .cloned()
-        .or_else(|| {
-            account
-                .get("credentials")
-                .and_then(|value| value.get("updated_at"))
-                .filter(|value| !value.is_null())
-                .cloned()
-        })
-}
-
-fn account_timestamp_order(local: &Value, remote: &Value) -> Option<std::cmp::Ordering> {
-    timestamp_order(&account_timestamp(local)?, &account_timestamp(remote)?)
-}
-
 fn comparable_account_data(value: &Value) -> Value {
-    let mut comparable = quota_cache::without_cache(value);
-    if let Value::Object(fields) = &mut comparable {
+    let mut result = quota_cache::without_cache(value);
+    if let Some(fields) = result.as_object_mut() {
         fields.remove("updated_at");
         fields.remove("field_updated_at");
     }
-    comparable
+    result
 }
 
-fn finish_account_merge(
-    mut result: Value,
-    local: Option<&Value>,
-    remote: Option<&Value>,
-) -> Option<Value> {
-    if let Value::Object(map) = &mut result {
-        map.remove("field_updated_at");
-        if let Some(cache) = quota_cache::merged_value(
-            local.and_then(|value| value.get("cache")),
-            remote.and_then(|value| value.get("cache")),
-        ) {
-            map.insert("cache".into(), cache);
-        }
-    }
-    Some(result)
-}
-
-fn merge_core(
-    base: Option<&Value>,
-    local: Option<&Value>,
-    remote: Option<&Value>,
-    choice: Option<&str>,
-    path: &str,
-    conflicts: &mut Vec<String>,
-) -> Option<Value> {
-    let recurse_objects = path != "credentials"
-        && local.is_some_and(Value::is_object)
-        && remote.is_some_and(Value::is_object);
-    if !recurse_objects && (local == remote || remote == base) {
-        return local.cloned();
-    }
-    if local == base && !recurse_objects {
-        return remote.cloned();
-    }
-    if path != "credentials" {
-        if let (Some(Value::Object(l)), Some(Value::Object(r))) = (local, remote) {
-            let b = base.and_then(Value::as_object);
-            let keys: BTreeSet<_> = l
-                .keys()
-                .chain(r.keys())
-                .chain(b.into_iter().flat_map(|m| m.keys()))
-                .collect();
-            let mut result = serde_json::Map::new();
-            for key in keys {
-                if let Some(value) = merge_value(
-                    b.and_then(|m| m.get(key)),
-                    l.get(key),
-                    r.get(key),
-                    choice,
-                    key,
-                    conflicts,
-                ) {
-                    result.insert(key.clone(), value);
+/// All selected account data, including refresh observations, participates in sync.
+fn selected_content(snapshot: &Snapshot, config: &DavConfig) -> Value {
+    let accounts = snapshot.accounts.as_ref().map(|accounts| {
+        let mut values = accounts
+            .values()
+            .map(|value| {
+                let mut value = value.clone();
+                if let Some(fields) = value.as_object_mut() {
+                    fields.remove("updated_at");
+                    fields.remove("field_updated_at");
+                    fields.entry("risk_controlled").or_insert(json!(false));
+                    if let Some(credentials) =
+                        fields.get_mut("credentials").and_then(Value::as_object_mut)
+                    {
+                        credentials.remove("updated_at");
+                    }
                 }
-            }
-            return Some(Value::Object(result));
-        }
-    }
-    match choice {
-        Some("local") => local.cloned(),
-        Some("remote") => remote.cloned(),
-        _ => {
-            if conflicts.len() < 30 {
-                conflicts.push(path.to_string());
-            }
-            local.cloned()
-        }
-    }
+                value
+            })
+            .collect::<Vec<_>>();
+        values.sort_by_cached_key(Value::to_string);
+        values
+    });
+    json!({"accounts": if config.sync_accounts { accounts } else { None },
+        "settings": if config.sync_settings { snapshot.settings.clone() } else { None }})
 }
-fn merge_fields(
-    base: &Option<Fields>,
-    local: &Option<Fields>,
-    remote: &Option<Fields>,
-    choice: Option<&str>,
-    conflicts: &mut Vec<String>,
-) -> Option<Fields> {
-    let to_value = |fields: &Option<Fields>| fields.as_ref().map(|v| json!(v));
-    let (b, l, r) = (to_value(base), to_value(local), to_value(remote));
-    merge_value(
-        b.as_ref(),
-        l.as_ref(),
-        r.as_ref(),
-        choice,
-        "data",
-        conflicts,
-    )
-    .map(|v| serde_json::from_value(v).expect("merged maps remain objects"))
+
+fn needs_cloud_choice(
+    config: &DavConfig,
+    baseline: &Snapshot,
+    local: &Snapshot,
+    remote: &Snapshot,
+) -> bool {
+    if selected_content(local, config) == selected_content(remote, config) {
+        return false;
+    }
+    let first = (config.sync_accounts && baseline.accounts.is_none())
+        || (config.sync_settings && baseline.settings.is_none());
+    first
+        || baseline.updated_at != remote.updated_at
+        || selected_content(baseline, config) != selected_content(remote, config)
 }
+
 fn baseline_file(config: &DavConfig) -> Result<PathBuf> {
     let identity = hash(
         format!(
@@ -913,6 +796,7 @@ struct SyncPreview {
     token: String,
     first_sync: bool,
     cloud_missing: bool,
+    requires_selection: bool,
     local_accounts: usize,
     cloud_accounts: usize,
     to_local: Changes,
@@ -975,101 +859,35 @@ fn changes(before: &Snapshot, after: &Snapshot, config: &DavConfig) -> Changes {
 }
 fn merged_snapshot(
     config: &DavConfig,
-    baseline: &Snapshot,
+    _baseline: &Snapshot,
     local: &Snapshot,
     remote: &Snapshot,
     options: &SyncOptions,
 ) -> Result<(Snapshot, Vec<String>, Vec<ConflictInfo>)> {
-    let mut conflicts = Vec::new();
-    let mut details = Vec::new();
-    let mut merged = remote.clone();
-    for (selected, base, l, r, target, accounts) in [
-        (
-            config.sync_accounts,
-            &baseline.accounts,
-            &local.accounts,
-            &remote.accounts,
-            &mut merged.accounts,
-            true,
-        ),
-        (
-            config.sync_settings,
-            &baseline.settings,
-            &local.settings,
-            &remote.settings,
-            &mut merged.settings,
-            false,
-        ),
-    ] {
-        if !selected {
-            continue;
-        }
-        *target = match options.mode {
-            SyncMode::Upload => l.clone(),
-            SyncMode::Download => Some(
-                r.clone()
-                    .context("云端没有所选内容，已停止下载 / Cloud has no selected content")?,
-            ),
-            SyncMode::Merge => {
-                // Describe conflicts with account names and field names, never credential values.
-                let empty = Fields::new();
-                let b = base.as_ref().unwrap_or(&empty);
-                let lv = l.as_ref().unwrap_or(&empty);
-                let rv = r.as_ref().unwrap_or(&empty);
-                for key in b
-                    .keys()
-                    .chain(lv.keys())
-                    .chain(rv.keys())
-                    .collect::<BTreeSet<_>>()
-                {
-                    let mut paths = Vec::new();
-                    merge_value(b.get(key), lv.get(key), rv.get(key), None, key, &mut paths);
-                    for field in paths {
-                        details.push(ConflictInfo {
-                            account: if accounts {
-                                lv.get(key)
-                                    .or_else(|| rv.get(key))
-                                    .and_then(|v| v["name"].as_str())
-                                    .map(str::to_owned)
-                            } else {
-                                None
-                            },
-                            field: if accounts && field == *key {
-                                "account".into()
-                            } else {
-                                field
-                            },
-                        });
-                    }
-                }
-                merge_fields(base, l, r, options.choice.as_deref(), &mut conflicts)
-            }
-        };
-    }
-    // Observations always keep the newest section, including during one-way operations.
+    let use_remote = options.mode == SyncMode::Download
+        || (options.mode == SyncMode::Merge
+            && (options.choice.as_deref() == Some("remote")
+                || (options.choice.is_none()
+                    && selected_content(local, config) == selected_content(remote, config))));
+    let source = if use_remote { remote } else { local };
+    let mut result = remote.clone();
     if config.sync_accounts {
-        if let Some(accounts) = merged.accounts.as_mut() {
-            for (key, value) in accounts {
-                let l = local
-                    .accounts
-                    .as_ref()
-                    .and_then(|m| m.get(key))
-                    .and_then(|v| v.get("cache"));
-                let r = remote
-                    .accounts
-                    .as_ref()
-                    .and_then(|m| m.get(key))
-                    .and_then(|v| v.get("cache"));
-                if let Some(cache) = quota_cache::merged_value(l, r) {
-                    value
-                        .as_object_mut()
-                        .context("Invalid account cache")?
-                        .insert("cache".into(), cache);
-                }
-            }
-        }
+        result.accounts = Some(
+            source
+                .accounts
+                .clone()
+                .context("云端没有所选账号内容 / Selected account data is missing")?,
+        );
     }
-    Ok((merged, conflicts, details))
+    if config.sync_settings {
+        result.settings = Some(
+            source
+                .settings
+                .clone()
+                .context("云端没有所选设置内容 / Selected settings are missing")?,
+        );
+    }
+    Ok((result, Vec::new(), Vec::new()))
 }
 fn preview(
     config: &DavConfig,
@@ -1082,31 +900,9 @@ fn preview(
     options: &SyncOptions,
     conflicts: Vec<ConflictInfo>,
 ) -> Result<SyncPreview> {
-    let restored_accounts = if options.mode == SyncMode::Merge && config.sync_accounts {
-        let empty = Fields::new();
-        let baseline_accounts = baseline.accounts.as_ref().unwrap_or(&empty);
-        let local_accounts = local.accounts.as_ref().unwrap_or(&empty);
-        let remote_accounts = remote.accounts.as_ref().unwrap_or(&empty);
-        let merged_accounts = merged.accounts.as_ref().unwrap_or(&empty);
-        baseline_accounts
-            .keys()
-            .filter(|key| {
-                local_accounts.contains_key(*key) != remote_accounts.contains_key(*key)
-                    && merged_accounts.contains_key(*key)
-            })
-            .filter_map(|key| {
-                merged_accounts
-                    .get(key)
-                    .and_then(|account| account.get("name"))
-                    .and_then(Value::as_str)
-                    .map(str::to_owned)
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
+    let restored_accounts = Vec::new();
     let token = hash(&serde_json::to_vec(
-        &json!({"config":config,"local":core_snapshot(local),"remote":remote,"baseline":core_snapshot(baseline),"merged":core_snapshot(merged),"etag":etag,"mode":options.mode,"choice":options.choice,"missing":missing}),
+        &json!({"config":config,"local":selected_content(local, config),"remote":remote,"baseline":core_snapshot(baseline),"etag":etag,"mode":options.mode,"missing":missing}),
     )?);
     Ok(SyncPreview {
         mode: options.mode,
@@ -1115,6 +911,8 @@ fn preview(
         first_sync: (config.sync_accounts && baseline.accounts.is_none())
             || (config.sync_settings && baseline.settings.is_none()),
         cloud_missing: missing,
+        requires_selection: options.mode != SyncMode::Merge
+            || needs_cloud_choice(config, baseline, local, remote),
         local_accounts: local.accounts.as_ref().map_or(0, Fields::len),
         cloud_accounts: remote.accounts.as_ref().map_or(0, Fields::len),
         to_local: changes(local, merged, config),
@@ -1128,56 +926,11 @@ fn preview(
     })
 }
 fn requires_review(plan: &SyncPreview) -> bool {
-    plan.first_sync
-        || plan.mode != SyncMode::Merge
-        || !plan.to_local.deleted.is_empty()
-        || !plan.to_cloud.deleted.is_empty()
-        || !plan.restored_accounts.is_empty()
-        || !plan.conflicts.is_empty()
+    plan.requires_selection
 }
 fn confirmed(plan: &SyncPreview, options: &SyncOptions) -> bool {
     !options.automatic && options.confirmation.as_deref() == Some(plan.token.as_str())
 }
-#[derive(Serialize, Deserialize)]
-struct Recovery {
-    version: u32,
-    saved_at: String,
-    mode: SyncMode,
-    local: Snapshot,
-    cloud: Snapshot,
-    baseline: Snapshot,
-}
-fn save_recovery(
-    config: &DavConfig,
-    local: &Snapshot,
-    cloud: &Snapshot,
-    baseline: &Snapshot,
-    mode: SyncMode,
-) -> Result<String> {
-    let path = baseline_file(config)?.with_file_name(format!(
-        "webdav-recovery-{}.json",
-        hash(
-            format!(
-                "{}\n{}",
-                directory_url(config, &config.directory)?,
-                config.username
-            )
-            .as_bytes()
-        )
-    ));
-    let recovery = Recovery {
-        version: 1,
-        saved_at: chrono::Utc::now().to_rfc3339(),
-        mode,
-        local: local.clone(),
-        cloud: cloud.clone(),
-        baseline: baseline.clone(),
-    };
-    let raw = zeroize::Zeroizing::new(serde_json::to_vec(&recovery)?);
-    auth::secure_file::atomic_write(&path, &auth::vault::encode(&raw, true)?)?;
-    Ok(path.to_string_lossy().into_owned())
-}
-
 async fn sync_inner(
     config: &DavConfig,
     ui: Fields,
@@ -1248,11 +1001,7 @@ async fn sync_inner(
     let mut local = capture(&store, &settings, &ui, config)?;
     attach_caches(&mut local, &store, &account_caches)?;
     let mut baseline = load_baseline(config)?;
-    // Recreating a removed cloud file must not interpret its absence as deleting every local account.
-    if missing {
-        baseline = empty_snapshot();
-    }
-    let (merged, conflicts, details) =
+    let (mut merged, conflicts, details) =
         merged_snapshot(config, &baseline, &local, &remote, &options)?;
     let plan = preview(
         config,
@@ -1282,10 +1031,9 @@ async fn sync_inner(
         });
     }
     validate_snapshot(&merged)?;
-    let next_store = if config.sync_accounts
-        && options.mode != SyncMode::Upload
-        && local.accounts != merged.accounts
-    {
+    let take_remote =
+        options.mode == SyncMode::Download || options.choice.as_deref() == Some("remote");
+    let next_store = if config.sync_accounts && take_remote && local.accounts != merged.accounts {
         Some(materialize_accounts(
             merged.accounts.as_ref().context("Missing accounts")?,
             &store,
@@ -1293,9 +1041,7 @@ async fn sync_inner(
     } else {
         None
     };
-    let next_settings = if config.sync_settings
-        && options.mode != SyncMode::Upload
-        && local.settings != merged.settings
+    let next_settings = if config.sync_settings && take_remote && local.settings != merged.settings
     {
         Some(validate_settings(
             merged.settings.as_ref().context("Missing settings")?,
@@ -1303,19 +1049,13 @@ async fn sync_inner(
     } else {
         None
     };
+    let uploaded = !take_remote
+        && (missing || selected_content(&merged, config) != selected_content(&remote, config));
+    if uploaded {
+        merged.updated_at = Some(chrono::Utc::now().to_rfc3339());
+    }
     let bytes = encode(&merged)?;
-    let recovery_path = if review {
-        Some(save_recovery(
-            config,
-            &local,
-            &remote,
-            &baseline,
-            options.mode,
-        )?)
-    } else {
-        None
-    };
-    let uploaded = options.mode != SyncMode::Download && (missing || merged != remote);
+    let recovery_path = None;
     if uploaded {
         upload_verified(
             &client,
@@ -1329,7 +1069,7 @@ async fn sync_inner(
         )
         .await?;
     }
-    let result_caches = if config.sync_accounts && options.mode != SyncMode::Upload {
+    let result_caches = if config.sync_accounts && take_remote {
         Some(remap_caches(
             &merged,
             next_store.as_ref().unwrap_or(&store),
@@ -1375,6 +1115,7 @@ async fn sync_inner(
     if config.sync_settings {
         baseline.settings = merged.settings.clone();
     }
+    baseline.updated_at = merged.updated_at.clone();
     let raw = zeroize::Zeroizing::new(serde_json::to_vec(&baseline)?);
     auth::secure_file::atomic_write(&baseline_file(config)?, &auth::vault::encode(&raw, true)?)?;
     if let Some(app) = app {
@@ -1389,7 +1130,7 @@ async fn sync_inner(
             let _ = app.emit("app-settings-changed", ());
         }
     }
-    let result_ui = if config.sync_settings && options.mode != SyncMode::Upload {
+    let result_ui = if config.sync_settings && take_remote {
         merged.settings.map(|fields| {
             fields
                 .into_iter()
@@ -1478,9 +1219,292 @@ pub async fn sync_webdav(
 mod tests {
     use super::*;
 
+    fn revision_data(name: &str, revision: &str) -> Snapshot {
+        Snapshot {
+            version: 1,
+            updated_at: Some(revision.into()),
+            accounts: fields(
+                json!({"a":{"name":name,"risk_controlled":false,"credentials":{"auth_data":"synthetic"}}}),
+            ),
+            settings: fields(json!({"theme":"light"})),
+        }
+    }
+
+    #[test]
+    fn unchanged_cloud_accepts_local_additions_edits_and_deletions() {
+        let config = DavConfig::default();
+        let cloud = revision_data("Original", "v1");
+        for accounts in [
+            fields(json!({})),
+            revision_data("Renamed", "v1").accounts,
+            fields(json!({"a":{"name":"A"},"b":{"name":"B"}})),
+        ] {
+            let local = Snapshot {
+                accounts,
+                ..cloud.clone()
+            };
+            assert!(!needs_cloud_choice(&config, &cloud, &local, &cloud));
+            let (result, _, _) =
+                merged_snapshot(&config, &cloud, &local, &cloud, &SyncOptions::default()).unwrap();
+            assert_eq!(result.accounts, local.accounts);
+        }
+    }
+
+    #[test]
+    fn cloud_revision_change_requires_a_whole_copy_choice_even_if_local_is_unchanged() {
+        let config = DavConfig::default();
+        let baseline = revision_data("Original", "v1");
+        let remote = revision_data("Other device", "v2");
+        assert!(needs_cloud_choice(&config, &baseline, &baseline, &remote));
+        assert!(needs_cloud_choice(
+            &config,
+            &empty_snapshot(),
+            &baseline,
+            &remote
+        ));
+        let local = revision_data("Local", "v1");
+        for choice in ["local", "remote"] {
+            let options = SyncOptions {
+                choice: Some(choice.into()),
+                ..Default::default()
+            };
+            let (result, conflicts, _) =
+                merged_snapshot(&config, &baseline, &local, &remote, &options).unwrap();
+            assert!(conflicts.is_empty());
+            assert_eq!(
+                result.accounts,
+                if choice == "local" {
+                    local.accounts.clone()
+                } else {
+                    remote.accounts.clone()
+                }
+            );
+        }
+        assert!(!needs_cloud_choice(&config, &baseline, &remote, &remote));
+        assert!(needs_cloud_choice(
+            &config,
+            &baseline,
+            &local,
+            &empty_snapshot()
+        ));
+    }
+
+    #[test]
+    fn legacy_cloud_changes_are_detected_without_a_timestamp() {
+        let config = DavConfig::default();
+        let mut baseline = revision_data("Original", "v1");
+        baseline.updated_at = None;
+        let mut remote = baseline.clone();
+        remote.settings = fields(json!({"theme":"dark"}));
+        assert!(needs_cloud_choice(&config, &baseline, &baseline, &remote));
+        assert!(!needs_cloud_choice(&config, &baseline, &remote, &baseline));
+    }
+
+    #[test]
+    fn live_refreshes_credentials_and_risk_all_change_sync_content() {
+        let config = DavConfig::default();
+        let base = revision_data("Original", "v1");
+        let mut local = base.clone();
+        let mut account = local.accounts.as_mut().unwrap().remove("a").unwrap();
+        account["plan_type"] = json!("team");
+        account["email"] = json!("discovered@example.com");
+        account["cache"] = json!(test_cache("2026-10-19T12:00:00Z", 20.0));
+        account["updated_at"] = json!("later-observation");
+        local
+            .accounts
+            .as_mut()
+            .unwrap()
+            .insert("discovered-plan-key".into(), account);
+        assert_ne!(
+            selected_content(&local, &config),
+            selected_content(&base, &config)
+        );
+        let account = local
+            .accounts
+            .as_mut()
+            .unwrap()
+            .get_mut("discovered-plan-key")
+            .unwrap();
+        account["risk_controlled"] = json!(true);
+        assert_ne!(
+            selected_content(&local, &config),
+            selected_content(&base, &config)
+        );
+        let account = local
+            .accounts
+            .as_mut()
+            .unwrap()
+            .get_mut("discovered-plan-key")
+            .unwrap();
+        account["risk_controlled"] = json!(false);
+        account["credentials"]["auth_data"] = json!("rotated-credential");
+        assert_ne!(
+            selected_content(&local, &config),
+            selected_content(&base, &config)
+        );
+    }
+
+    #[test]
+    fn two_devices_require_a_choice_after_the_other_device_publishes() {
+        let config = DavConfig::default();
+        let initial = revision_data("Initial", "v1");
+        let first_device = revision_data("Edited on A", "v1");
+        assert!(!needs_cloud_choice(
+            &config,
+            &initial,
+            &first_device,
+            &initial
+        ));
+        let (mut cloud, _, _) = merged_snapshot(
+            &config,
+            &initial,
+            &first_device,
+            &initial,
+            &SyncOptions::default(),
+        )
+        .unwrap();
+        cloud.updated_at = Some("v2".into());
+        let second_device = revision_data("Edited on B", "v1");
+        assert!(needs_cloud_choice(
+            &config,
+            &initial,
+            &second_device,
+            &cloud
+        ));
+        let choice = SyncOptions {
+            choice: Some("remote".into()),
+            ..Default::default()
+        };
+        let (accepted, _, _) =
+            merged_snapshot(&config, &initial, &second_device, &cloud, &choice).unwrap();
+        assert_eq!(accepted.accounts, cloud.accounts);
+        let edited_again = revision_data("Next edit on B", "v2");
+        assert!(!needs_cloud_choice(
+            &config,
+            &accepted,
+            &edited_again,
+            &cloud
+        ));
+    }
+
+    #[test]
+    fn refresh_during_confirmation_requires_review_of_the_current_copy() {
+        let config = DavConfig::default();
+        let base = revision_data("Original", "v1");
+        let cloud = revision_data("Cloud", "v2");
+        let options = SyncOptions::default();
+        let original = preview(
+            &config,
+            &base,
+            &base,
+            &cloud,
+            &base,
+            false,
+            Some("etag"),
+            &options,
+            vec![],
+        )
+        .unwrap();
+        let mut refreshed = base.clone();
+        refreshed.accounts.as_mut().unwrap().get_mut("a").unwrap()["plan_type"] = json!("team");
+        refreshed.accounts.as_mut().unwrap().get_mut("a").unwrap()["cache"] =
+            json!(test_cache("2026-10-19T12:00:00Z", 20.0));
+        let confirm = SyncOptions {
+            choice: Some("remote".into()),
+            confirmation: Some(original.token),
+            ..Default::default()
+        };
+        let plan = preview(
+            &config,
+            &base,
+            &refreshed,
+            &cloud,
+            &cloud,
+            false,
+            Some("etag"),
+            &confirm,
+            vec![],
+        )
+        .unwrap();
+        assert!(!confirmed(&plan, &confirm));
+    }
+
+    #[test]
+    fn cloud_choice_keeps_selected_cache_without_merging_newer_local_observations() {
+        let config = DavConfig::default();
+        let local = revision_data("Local", "v1");
+        let mut cloud = revision_data("Cloud", "v2");
+        cloud.accounts.as_mut().unwrap().get_mut("a").unwrap()["cache"] =
+            json!(test_cache("2026-10-19T10:00:00Z", 90.0));
+        let options = SyncOptions {
+            choice: Some("remote".into()),
+            ..Default::default()
+        };
+        let (result, _, _) = merged_snapshot(&config, &local, &local, &cloud, &options).unwrap();
+        assert_eq!(result.accounts, cloud.accounts);
+        let portable = Snapshot {
+            updated_at: cloud.updated_at.clone(),
+            ..empty_snapshot()
+        };
+        assert_eq!(
+            decode(&encode(&portable).unwrap()).unwrap().updated_at,
+            cloud.updated_at
+        );
+    }
+
+    #[test]
+    fn old_configs_default_to_thirty_minute_intervals() {
+        let config: DavConfig = serde_json::from_value(json!({"auto_sync":true})).unwrap();
+        assert_eq!(config.auto_sync_interval_minutes, 30);
+        let config: DavConfig =
+            serde_json::from_value(json!({"auto_sync_interval_minutes":45})).unwrap();
+        assert_eq!(config.auto_sync_interval_minutes, 45);
+    }
+
+    #[test]
+    fn cache_only_refreshes_are_uploaded_when_cloud_has_not_changed() {
+        let config = DavConfig::default();
+        let base = revision_data("Account", "v1");
+        let mut local = base.clone();
+        local.accounts.as_mut().unwrap().get_mut("a").unwrap()["cache"] =
+            json!(test_cache("2026-10-19T12:00:00Z", 25.0));
+        assert_ne!(
+            selected_content(&local, &config),
+            selected_content(&base, &config)
+        );
+        assert!(!needs_cloud_choice(&config, &base, &local, &base));
+        let (upload, _, _) =
+            merged_snapshot(&config, &base, &local, &base, &SyncOptions::default()).unwrap();
+        assert_eq!(upload.accounts, local.accounts);
+    }
+
     fn test_cache(stamp: &str, used: f64) -> AccountCache {
         serde_json::from_value(json!({"metadata":{"recorded_at":stamp,"subscription_expires_at":"2030-12-01T00:00:00Z"},"usage":{"recorded_at":stamp,"primary_used_percent":used,"primary_window_minutes":300,"primary_resets_at":1900000000,"secondary_used_percent":used,"secondary_window_minutes":10080,"secondary_resets_at":1900100000,"has_credits":true,"unlimited_credits":false,"credits_balance":"10"},"resets":{"recorded_at":stamp,"credits":[{"id":"synthetic-credit","expires_at":"2030-12-01T00:00:00Z","title":"Reset"}]}})).unwrap()
     }
+    #[test]
+    fn risk_state_survives_sync_and_legacy_snapshots() {
+        let mut account = StoredAccount::new_api_key("risk".into(), "synthetic-key".into());
+        account.risk_controlled = true;
+        let mut value = account_value(&account, false).unwrap();
+        assert!(
+            restore_account(&value, Some(&account))
+                .unwrap()
+                .risk_controlled
+        );
+        value.as_object_mut().unwrap().remove("risk_controlled");
+        assert!(
+            restore_account(&value, Some(&account))
+                .unwrap()
+                .risk_controlled
+        );
+        account.risk_controlled = false;
+        assert!(
+            !restore_account(&account_value(&account, false).unwrap(), Some(&account))
+                .unwrap()
+                .risk_controlled
+        );
+    }
+
     #[test]
     fn cache_sections_keep_the_newest_atomic_observation_and_empty_reset_results() {
         let mut local = test_cache("2026-10-19T12:00:00Z", 10.0);
@@ -1496,76 +1520,7 @@ mod tests {
         let b = test_cache("2026-10-19T12:00:00Z", 20.0);
         assert_eq!(quota_cache::merge(&a, &b), quota_cache::merge(&b, &a));
     }
-    #[test]
-    fn cache_refreshes_do_not_conflict_and_missing_accounts_keep_the_remaining_copy() {
-        let account = StoredAccount::new_api_key("Cache account".into(), "synthetic-key".into());
-        let key = account_key(&account);
-        let mut base = account_value(&account, false).unwrap();
-        base["cache"] = json!(test_cache("2026-10-19T10:00:00Z", 1.0));
-        let mut local = base.clone();
-        local["cache"] = json!(test_cache("2026-10-19T12:00:00Z", 20.0));
-        let mut remote = base.clone();
-        remote["cache"] = json!(test_cache("2026-10-19T11:00:00Z", 50.0));
-        let mut conflicts = vec![];
-        let merged = merge_value(
-            Some(&base),
-            Some(&local),
-            Some(&remote),
-            None,
-            &key,
-            &mut conflicts,
-        )
-        .unwrap();
-        assert!(conflicts.is_empty());
-        assert_eq!(merged["cache"], local["cache"]);
-        assert_eq!(
-            merge_value(Some(&base), None, Some(&remote), None, &key, &mut conflicts),
-            Some(remote)
-        );
-        assert_eq!(
-            merge_value(Some(&base), Some(&local), None, None, &key, &mut conflicts),
-            Some(local)
-        );
-        assert!(conflicts.is_empty());
-    }
-    #[test]
-    fn missing_accounts_on_either_side_are_restored_only_after_review() {
-        let config = DavConfig::default();
-        let account = StoredAccount::new_api_key("Keep account".into(), "synthetic-key".into());
-        let baseline = Snapshot {
-            version: 1,
-            accounts: fields(json!({"a": account_value(&account, false).unwrap()})),
-            settings: None,
-        };
-        let missing = Snapshot {
-            accounts: Some(Fields::new()),
-            ..baseline.clone()
-        };
-        for (local, remote) in [(&missing, &baseline), (&baseline, &missing)] {
-            let options = SyncOptions::default();
-            let (merged, conflicts, details) =
-                merged_snapshot(&config, &baseline, local, remote, &options).unwrap();
-            assert!(conflicts.is_empty() && details.is_empty());
-            assert_eq!(merged.accounts, baseline.accounts);
-            let plan = preview(
-                &config,
-                &baseline,
-                local,
-                remote,
-                &merged,
-                false,
-                Some("\"v1\""),
-                &options,
-                details,
-            )
-            .unwrap();
-            assert_eq!(plan.restored_accounts, vec!["Keep account"]);
-            assert!(requires_review(&plan));
-            assert!(!confirmed(&plan, &options));
-            assert!(plan.to_local.deleted.is_empty() && plan.to_cloud.deleted.is_empty());
-            assert_eq!(plan.to_local.added.len() + plan.to_cloud.added.len(), 1);
-        }
-    }
+
     #[test]
     fn cache_remaps_to_each_devices_uuid_and_restores_subscription_expiry() {
         let source = StoredAccount::new_api_key("Portable".into(), "synthetic-portable-key".into());
@@ -1604,61 +1559,7 @@ mod tests {
             cache.metadata.unwrap().subscription_expires_at
         );
     }
-    #[test]
-    fn cache_only_updates_are_counted_separately_and_do_not_invalidate_local_confirmation() {
-        let account = StoredAccount::new_api_key("Cache".into(), "synthetic-key".into());
-        let store = AccountsStore {
-            accounts: vec![account.clone()],
-            ..Default::default()
-        };
-        let config = DavConfig::default();
-        let base = capture(&store, &AppSettings::default(), &Fields::new(), &config).unwrap();
-        let mut local = base.clone();
-        attach_caches(
-            &mut local,
-            &store,
-            &BTreeMap::from([(account.id.clone(), test_cache("2026-10-19T12:00:00Z", 1.0))]),
-        )
-        .unwrap();
-        let (merged, conflicts, details) =
-            merged_snapshot(&config, &base, &local, &base, &SyncOptions::default()).unwrap();
-        assert!(conflicts.is_empty() && details.is_empty());
-        let plan = preview(
-            &config,
-            &base,
-            &local,
-            &base,
-            &merged,
-            false,
-            Some("\"v1\""),
-            &SyncOptions::default(),
-            vec![],
-        )
-        .unwrap();
-        assert!(!requires_review(&plan));
-        assert!(plan.to_cloud.updated.is_empty());
-        assert_eq!(plan.to_cloud.cache_updated, vec!["Cache"]);
-        let mut later = local.clone();
-        attach_caches(
-            &mut later,
-            &store,
-            &BTreeMap::from([(account.id.clone(), test_cache("2026-10-19T13:00:00Z", 2.0))]),
-        )
-        .unwrap();
-        let plan2 = preview(
-            &config,
-            &base,
-            &later,
-            &base,
-            &later,
-            false,
-            Some("\"v1\""),
-            &SyncOptions::default(),
-            vec![],
-        )
-        .unwrap();
-        assert_eq!(plan.token, plan2.token);
-    }
+
     #[test]
     fn quota_wire_rejects_statistics_credentials_and_invalid_data() {
         let cache = test_cache("2026-10-19T12:00:00Z", 1.0);
@@ -1686,11 +1587,13 @@ mod tests {
         config.sync_settings = false;
         let local = Snapshot {
             version: 1,
+            updated_at: None,
             accounts: fields(json!({"local":{"name":"Local"}})),
             settings: fields(json!({"theme":"dark"})),
         };
         let remote = Snapshot {
             version: 1,
+            updated_at: None,
             accounts: fields(json!({"cloud":{"name":"Cloud"}})),
             settings: fields(json!({"theme":"light"})),
         };
@@ -1734,66 +1637,7 @@ mod tests {
         assert_eq!(merged.accounts, remote.accounts);
         assert_eq!(merged.settings, local.settings);
     }
-    #[test]
-    fn first_sync_and_deletions_require_review_but_routine_updates_do_not() {
-        let config = DavConfig::default();
-        let local = Snapshot {
-            version: 1,
-            accounts: fields(json!({"a":{"name":"A"}})),
-            settings: fields(json!({"theme":"light"})),
-        };
-        let options = SyncOptions::default();
-        let plan = preview(
-            &config,
-            &empty_snapshot(),
-            &local,
-            &empty_snapshot(),
-            &local,
-            true,
-            None,
-            &options,
-            vec![],
-        )
-        .unwrap();
-        assert!(plan.first_sync && plan.cloud_missing && requires_review(&plan));
-        assert_eq!(plan.to_cloud.added, vec!["A"]);
-        let updated = Snapshot {
-            settings: fields(json!({"theme":"dark"})),
-            ..local.clone()
-        };
-        let plan = preview(
-            &config,
-            &local,
-            &local,
-            &updated,
-            &updated,
-            false,
-            Some("\"v1\""),
-            &options,
-            vec![],
-        )
-        .unwrap();
-        assert!(!requires_review(&plan));
-        assert_eq!(plan.to_local.settings, vec!["theme"]);
-        let deleted = Snapshot {
-            accounts: Some(Fields::new()),
-            ..local.clone()
-        };
-        let plan = preview(
-            &config,
-            &local,
-            &local,
-            &deleted,
-            &deleted,
-            false,
-            Some("\"v2\""),
-            &options,
-            vec![],
-        )
-        .unwrap();
-        assert!(requires_review(&plan));
-        assert_eq!(plan.to_local.deleted, vec!["A"]);
-    }
+
     #[test]
     fn confirmation_is_bound_to_data_scope_direction_and_cloud_revision() {
         let config = DavConfig::default();
@@ -1880,178 +1724,11 @@ mod tests {
         .unwrap();
         assert!(!confirmed(&stale, &options));
     }
-    #[test]
-    fn conflict_descriptions_expose_names_and_fields_without_credential_values() {
-        let config = DavConfig::default();
-        let snapshot = |name: &str, token: &str| Snapshot {
-            version: 1,
-            accounts: fields(
-                json!({"account-key":{"name":name,"credentials":{"auth_data":token,"updated_at":null}}}),
-            ),
-            settings: None,
-        };
-        let base = snapshot("Account A", "synthetic-old");
-        let local = snapshot("Account A", "synthetic-local");
-        let remote = snapshot("Account A", "synthetic-cloud");
-        let (_, conflicts, details) =
-            merged_snapshot(&config, &base, &local, &remote, &SyncOptions::default()).unwrap();
-        assert_eq!(conflicts, vec!["account-key"]);
-        assert_eq!(details[0].account.as_deref(), Some("Account A"));
-        assert_eq!(details[0].field, "account");
-        assert!(!serde_json::to_string(&details)
-            .unwrap()
-            .contains("synthetic"));
-        let (_, conflicts, details) = merged_snapshot(
-            &config,
-            &base,
-            &local,
-            &remote,
-            &SyncOptions {
-                choice: Some("remote".into()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert!(conflicts.is_empty());
-        assert_eq!(details.len(), 1);
-    }
-    #[test]
-    fn recovery_contains_both_pre_operation_snapshots_and_baseline() {
-        let local = Snapshot {
-            version: 1,
-            accounts: fields(json!({"local":{"name":"Local"}})),
-            settings: None,
-        };
-        let cloud = Snapshot {
-            version: 1,
-            accounts: fields(json!({"cloud":{"name":"Cloud"}})),
-            settings: None,
-        };
-        let backup = Recovery {
-            version: 1,
-            saved_at: chrono::Utc::now().to_rfc3339(),
-            mode: SyncMode::Upload,
-            local: local.clone(),
-            cloud: cloud.clone(),
-            baseline: empty_snapshot(),
-        };
-        let restored: Recovery =
-            serde_json::from_slice(&serde_json::to_vec(&backup).unwrap()).unwrap();
-        assert_eq!(restored.local, local);
-        assert_eq!(restored.cloud, cloud);
-        assert_eq!(restored.baseline, empty_snapshot());
-        assert_eq!(restored.mode, SyncMode::Upload);
-    }
 
     fn fields(value: Value) -> Option<Fields> {
         Some(serde_json::from_value(value).unwrap())
     }
-    fn merge(
-        base: Value,
-        local: Value,
-        remote: Value,
-        choice: Option<&str>,
-    ) -> (Value, Vec<String>) {
-        let mut conflicts = Vec::new();
-        let value = merge_fields(
-            &fields(base),
-            &fields(local),
-            &fields(remote),
-            choice,
-            &mut conflicts,
-        );
-        (json!(value), conflicts)
-    }
-    #[test]
-    fn three_way_merge_preserves_independent_changes_and_deletions() {
-        let (value, conflicts) = merge(
-            json!({"a":{"name":"before","hidden":false},"b":1}),
-            json!({"a":{"name":"after","hidden":false}}),
-            json!({"a":{"name":"before","hidden":true},"b":1,"c":3}),
-            None,
-        );
-        assert!(conflicts.is_empty());
-        assert_eq!(value, json!({"a":{"name":"after","hidden":true},"c":3}));
-        // An unchanged offline device must accept a remote deletion instead of resurrecting it.
-        assert_eq!(
-            merge(json!({"a":1}), json!({"a":1}), json!({}), None).0,
-            json!({})
-        );
-    }
-    #[test]
-    fn conflicts_pause_and_resolve_only_conflicting_fields() {
-        let base = json!({"name":"old","hidden":false});
-        let local = json!({"name":"local","hidden":false});
-        let remote = json!({"name":"remote","hidden":true});
-        assert_eq!(
-            merge(base.clone(), local.clone(), remote.clone(), None).1,
-            vec!["name"]
-        );
-        assert_eq!(
-            merge(base.clone(), local.clone(), remote.clone(), Some("local")).0,
-            json!({"name":"local","hidden":true})
-        );
-        assert_eq!(merge(base, local, remote.clone(), Some("remote")).0, remote);
-        assert!(!merge(json!({"a":1}), json!({}), json!({"a":2}), None)
-            .1
-            .is_empty());
-    }
-    #[test]
-    fn credentials_merge_as_a_unit_and_first_sync_unions_accounts() {
-        let (value, conflicts) = merge(
-            json!({"credentials":{"auth_data":"old","updated_at":1}}),
-            json!({"credentials":{"auth_data":"local","updated_at":2}}),
-            json!({"credentials":{"auth_data":"remote","updated_at":3}}),
-            Some("remote"),
-        );
-        assert!(conflicts.is_empty());
-        assert_eq!(
-            value,
-            json!({"credentials":{"auth_data":"remote","updated_at":3}})
-        );
-        let mut conflicts = vec![];
-        assert_eq!(
-            merge_fields(
-                &None,
-                &fields(json!({"a":1})),
-                &fields(json!({"b":2})),
-                None,
-                &mut conflicts
-            ),
-            fields(json!({"a":1,"b":2}))
-        );
-        assert!(conflicts.is_empty());
-    }
-    #[test]
-    fn newer_account_timestamp_wins_even_if_a_choice_is_supplied() {
-        let local = json!({"account":{"credentials":{"auth_data":"new","updated_at":"2026-10-16T10:00:00Z"}}});
-        let remote = json!({"account":{"credentials":{"auth_data":"old","updated_at":"2026-10-15T10:00:00Z"}}});
-        let (merged, conflicts) = merge(local.clone(), local.clone(), remote.clone(), None);
-        assert!(conflicts.is_empty());
-        assert_eq!(merged, local);
-        assert_eq!(
-            merge(local.clone(), local.clone(), remote.clone(), Some("remote")).0,
-            local
-        );
-    }
-    #[test]
-    fn account_timestamp_selects_a_whole_copy_and_equal_times_require_a_choice() {
-        let local = json!({"a":{"name":"Local", "hidden":false, "updated_at":"2026-10-22T12:00:00Z", "credentials":{"auth_data":"local", "updated_at":"2026-10-20T12:00:00Z"}}});
-        let remote = json!({"a":{"name":"Remote", "hidden":true, "updated_at":"2026-10-21T12:00:00Z", "credentials":{"auth_data":"remote", "updated_at":"2026-10-21T12:00:00Z"}}});
-        let (merged, conflicts) = merge(json!({}), local.clone(), remote.clone(), Some("remote"));
-        assert!(conflicts.is_empty());
-        assert_eq!(merged, local);
-        let mut equal_time = remote;
-        equal_time["a"]["updated_at"] = local["a"]["updated_at"].clone();
-        assert_eq!(
-            merge(json!({}), local.clone(), equal_time.clone(), None).1,
-            vec!["a"]
-        );
-        assert_eq!(
-            merge(json!({}), local, equal_time.clone(), Some("remote")).0,
-            equal_time
-        );
-    }
+
     #[test]
     fn account_roundtrip_preserves_local_selection_and_does_not_sync_local_metadata() {
         let mut account =
@@ -2196,6 +1873,7 @@ mod tests {
         let url = directory_url(&config, "/").unwrap().join(FILE).unwrap();
         let snapshot = Snapshot {
             version: 1,
+            updated_at: None,
             accounts: Some(Fields::new()),
             settings: None,
         };

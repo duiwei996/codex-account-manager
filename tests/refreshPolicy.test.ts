@@ -45,3 +45,16 @@ test("category includes a valid account in use across tabs exactly once", () => 
   assert.deepEqual(ids("category", "unknown"), ["active"]);
   assert.deepEqual(ids("current", "team"), ["active"]);
 });
+
+
+test("isolated accounts are excluded from current, all and plan refreshes", () => {
+  const accounts = [
+    { id: "active-risk", is_active: true, plan_type: "team", risk_controlled: true },
+    { id: "risk", is_active: false, plan_type: "team", risk_controlled: true },
+    { id: "normal", is_active: false, plan_type: "team" },
+  ];
+  assert.deepEqual(selectRefreshAccounts(accounts, "current"), []);
+  assert.deepEqual(selectRefreshAccounts(accounts, "category", "all").map(a => a.id), ["normal"]);
+  assert.deepEqual(selectRefreshAccounts(accounts, "category", "team").map(a => a.id), ["normal"]);
+  assert.deepEqual(selectRefreshAccounts(accounts, "category", "risk"), []);
+});

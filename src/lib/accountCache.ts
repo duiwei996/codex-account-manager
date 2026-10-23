@@ -36,6 +36,7 @@ function cleanAccount(value: unknown): AccountWithUsage | undefined {
     subscription_expires_at: date(value.subscription_expires_at) ?? null,
     auth_mode: value.auth_mode as AccountWithUsage["auth_mode"], is_active: value.is_active === true,
     credentials_invalid: value.credentials_invalid === true,
+    risk_controlled: value.risk_controlled === true,
     created_at: date(value.created_at) ?? new Date(0).toISOString(), last_used_at: date(value.last_used_at) ?? null,
     metadata_recorded_at: date(value.metadata_recorded_at), usage: cleanUsage(value.usage, value.id), usageLoading: false,
   };
@@ -45,10 +46,10 @@ export function readAccountCache(): AccountWithUsage[] {
   if (!Array.isArray(value)) return [];
   return value.slice(0, 200).map(cleanAccount).filter((account): account is AccountWithUsage => !!account);
 }
-export function writeAccountCache(accounts: AccountWithUsage[]): void {
+export function writeAccountCache(accounts: AccountWithUsage[], replace = false): void {
   // Project only display fields. Errors, pending requests and credentials are never persisted.
   const previous = new Map(readAccountCache().map(a => [a.id,a]));
-  write(ACCOUNT_CACHE_KEY, accounts.map(cleanAccount).filter((a): a is AccountWithUsage => !!a).map(a => mergeAccountQuota(a,previous.get(a.id))));
+  write(ACCOUNT_CACHE_KEY, accounts.map(cleanAccount).filter((a): a is AccountWithUsage => !!a).map(a => replace ? a : mergeAccountQuota(a,previous.get(a.id))));
 }
 export function mergeAccountQuota(account: AccountWithUsage, cached?: AccountWithUsage): AccountWithUsage {
   if (!cached) return account;
@@ -71,11 +72,11 @@ export function readResetCreditsCache(accountId: string): CachedResetCredits | n
   const current = read(RESET_CACHE_KEY);
   return object(current) ? cleanResetCache(current[accountId]) : null;
 }
-export function writeResetCreditsCache(accountId: string, data: AccountResetCredits, recordedAt = new Date().toISOString()): void {
+export function writeResetCreditsCache(accountId: string, data: AccountResetCredits, recordedAt = new Date().toISOString(), replace = false): void {
   const entry = cleanResetCache({ recorded_at:recordedAt,data });
   if (!entry) return;
   const current = readResetCreditsCache(accountId);
-  if (current && cacheTime(current.recorded_at) > cacheTime(entry.recorded_at)) return;
+  if (!replace && current && cacheTime(current.recorded_at) > cacheTime(entry.recorded_at)) return;
   const raw = read(RESET_CACHE_KEY);
   const entries: Record<string,CachedResetCredits> = {};
   if (object(raw)) for (const id of Object.keys(raw).slice(-199)) { const old = cleanResetCache(raw[id]); if (old) entries[id]=old; }

@@ -83,3 +83,33 @@ test("invalid active and inactive accounts offer login instead of switch or rest
     });
   }
 });
+
+
+test("account cards provide reversible risk controls", async () => {
+  for (const risk_controlled of [false, true]) {
+    let moved = 0;
+    await withCard({
+      account: { id: "risk-test", name: "Risk test", is_active: false, auth_mode: "api_key", risk_controlled },
+      onToggleRisk: async () => { moved++; },
+    }, async container => {
+      const buttons = [...container.querySelectorAll("button")];
+      const move = buttons.find(button => /Move to risk control|移入风控|Move out of risk control|移出风控/.test(button.getAttribute("aria-label") ?? button.textContent));
+      assert.ok(move);
+      assert.equal(move.textContent, "");
+      assert.ok(move.querySelector("svg"));
+      assert.match(move.getAttribute("aria-label"), risk_controlled ? /Move out|移出/ : /Move to|移入/);
+      await act(async () => move.click());
+      assert.equal(moved, 1);
+    });
+  }
+});
+
+
+test("display cache preserves risk isolation across reloads", async () => {
+  const cache = await server.ssrLoadModule("/src/lib/accountCache.ts");
+  const account = { id: "cached-risk", name: "Cached risk", is_active: false, auth_mode: "api_key", risk_controlled: true };
+  cache.writeAccountCache([account]);
+  assert.equal(cache.readAccountCache()[0]?.risk_controlled, true);
+  cache.writeAccountCache([{ ...account, risk_controlled: false }]);
+  assert.equal(cache.readAccountCache()[0]?.risk_controlled, false);
+});

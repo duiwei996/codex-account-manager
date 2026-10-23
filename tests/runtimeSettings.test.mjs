@@ -363,6 +363,7 @@ test("main page refresh and both warmups include the active account and exclude 
     {...account("team"), auth_mode: "chat_g_p_t", plan_type: "team"},
     {...account("other-free"), auth_mode: "chat_g_p_t", plan_type: "free"},
     {...account("invalid-team"), auth_mode: "chat_g_p_t", plan_type: "team", credentials_invalid: true},
+    {...account("risk-team"), auth_mode: "chat_g_p_t", plan_type: "team", risk_controlled: true},
   ];
   const ids = command => [...new Set(calls.filter(c => c.command === command).map(c => c.args.accountId))].sort();
   const prepare = async mode => {
@@ -385,24 +386,24 @@ test("main page refresh and both warmups include the active account and exclude 
   try {
     await prepare('off');
     calls.length = 0;
-    await click('button[aria-label="刷新用量: team"]');
+    await click('button[aria-label="刷新用量: 团队"]');
     assert.deepEqual(ids('get_usage'), ['active-plus', 'team']);
     assert.deepEqual(ids('refresh_account_metadata'), ['active-plus', 'team']);
     calls.length = 0;
     await click('#account-tab-free');
     calls.length = 0;
-    await click('button[aria-label="刷新用量: 免费账号"]');
+    await click('button[aria-label="刷新用量: 免费"]');
     assert.deepEqual(ids('get_usage'), ['active-plus', 'other-free']);
     await prepare('auto');
     assert.deepEqual(ids('warmup_account'), ['active-plus', 'team']);
-    assert.ok(!calls.some(c => c.command === 'get_usage' && ['other-free', 'invalid-team'].includes(c.args.accountId)));
+    assert.ok(!calls.some(c => c.command === 'get_usage' && ['other-free', 'invalid-team', 'risk-team'].includes(c.args.accountId)));
     calls.length = 0;
     await click('#account-tab-free');
     await settle();
     assert.deepEqual(ids('warmup_account'), ['other-free']);
     await prepare('timed');
     assert.deepEqual(ids('warmup_account'), ['active-plus', 'team']);
-    assert.ok(!calls.some(c => c.command === 'get_usage' && ['other-free', 'invalid-team'].includes(c.args.accountId)));
+    assert.ok(!calls.some(c => c.command === 'get_usage' && ['other-free', 'invalid-team', 'risk-team'].includes(c.args.accountId)));
   } finally {
     await act(async () => root.render(null));
     customUsage = null;

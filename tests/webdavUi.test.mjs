@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
-import { createElement, act } from "react";
+import { createElement, Fragment, act } from "react";
 import { JSDOM } from "jsdom";
 import { createServer } from "vite";
 import react from "@vitejs/plugin-react";
 
 const dom = new JSDOM('<div id="root"></div>', { url: "http://localhost" });
 Object.assign(globalThis, { window: dom.window, document: dom.window.document, localStorage: dom.window.localStorage, Event: dom.window.Event, IS_REACT_ACT_ENVIRONMENT: true });
+dom.window.HTMLDialogElement.prototype.showModal = function () { this.setAttribute("open", ""); };
 const calls = [];
 let saved = { server: "https://example.com/dav/", username: "public-test", directory: "/", sync_accounts: true, sync_settings: true, auto_sync: false };
 const emptyChanges = () => ({ added: [], updated: [], deleted: [], settings: [] });
@@ -31,6 +32,8 @@ window.__TAURI_INTERNALS__ = {
 };
 const server = await createServer({ configFile: false, plugins: [react()], server: { middlewareMode: true, hmr: false }, optimizeDeps: { noDiscovery: true, include: [] }, appType: "custom" });
 const { WebDavSettings } = await server.ssrLoadModule("/src/components/WebDavSettings.tsx");
+const { WebDavSyncDialog } = await server.ssrLoadModule("/src/components/WebDavSyncDialog.tsx");
+const { WebDavSyncButton } = await server.ssrLoadModule("/src/components/WebDavSyncButton.tsx");
 const service = await server.ssrLoadModule("/src/lib/webdav.ts");
 const quotaSync = await server.ssrLoadModule("/src/lib/accountQuotaSync.ts");
 const accountCache = await server.ssrLoadModule("/src/lib/accountCache.ts");
@@ -40,7 +43,7 @@ const root = createRoot(document.getElementById("root"));
 const settle = async () => { for (let n = 0; n < 3; n++) await act(async () => { await new Promise(resolve => setTimeout(resolve, 10)); }); };
 const button = text => [...document.querySelectorAll("button")].find(b => b.textContent === text);
 async function click(text) { assert.ok(button(text), `Missing button ${text}`); await act(async () => button(text).click()); await settle(); }
-async function mount() { await act(async () => root.render(null)); await act(async () => root.render(createElement(WebDavSettings))); await settle(); }
+async function mount() { await act(async () => root.render(null)); await act(async () => root.render(createElement(Fragment, null, createElement(WebDavSettings), createElement(WebDavSyncDialog)))); await settle(); }
 after(async () => { await act(async () => root.unmount()); await server.close(); dom.window.close(); });
 
 test("directory browsing enters subfolders, goes up and saves only the chosen path", async () => {
@@ -69,69 +72,21 @@ test("two independent options, minimal settings payload and visible actual size"
   const options = document.querySelectorAll('input[type="checkbox"]');
   assert.equal(options.length, 3);
   await act(async () => options[0].click()); await settle();
-  await click("双向同步");
+  await click("立即同步");
   assert.equal(saved.sync_accounts, false); assert.equal(saved.sync_settings, true);
   const payload = calls.filter(c => c.command === "sync_webdav").at(-1).args;
   assert.deepEqual(Object.keys(payload.ui).sort(), ["auto_warmup", "language", "theme", "timed_warmup", "warmup_times"]);
   assert.doesNotMatch(JSON.stringify(payload), /password|server|username|token/);
   assert.match(document.body.textContent, /0.3 KB/);
   await act(async () => document.querySelectorAll('input[type="checkbox"]')[1].click()); await settle();
-  assert.equal(button("双向同步").disabled, true);
+  assert.equal(button("立即同步").disabled, true);
 });
 
-test("conflict pauses automatic sync and explicit retry forwards the chosen side", async () => {
-  saved = { ...saved, sync_accounts: true, sync_settings: true };
-  await mount();
-  syncReply = completed({ conflicts: ["name"], needs_confirmation: true, preview: plan({ conflicts: [{ account: "测试账号", field: "name" }] }), synced_at: "", ui: null });
-  await click("双向同步");
-  assert.equal(service.davState.paused, true);
-  assert.match(document.body.textContent, /同步已暂停/);
-  assert.match(document.body.textContent, /测试账号：名称/);
-  assert.equal(button("确认双向同步").disabled, true);
-  syncReply = completed({ needs_confirmation: true, synced_at: "", preview: plan({ choice: "remote", token: "resolved-v2", conflicts: [{ account: "测试账号", field: "name" }] }) });
-  await click("冲突采用云端");
-  assert.equal(calls.filter(c => c.command === "sync_webdav").at(-1).args.choice, "remote");
-  assert.equal(service.davState.paused, true);
-  syncReply = completed({ ui: { theme: "dark", language: "zh-CN", auto_warmup: true, timed_warmup: true, warmup_times: ["09:30"] } });
-  await click("确认双向同步");
-  assert.equal(calls.filter(c => c.command === "sync_webdav").at(-1).args.confirmation, "resolved-v2");
-  assert.equal(service.davState.paused, false);
-  assert.equal(localStorage.getItem("codex-switcher-theme"), "dark");
-  assert.equal(localStorage.getItem("codex-switcher-auto-warmup-all"), "true");
-  assert.equal(localStorage.getItem("codex-switcher-timed-warmup-times"), '["09:30"]');
-});
 
-test("first sync previews upload and download separately without applying settings before confirmation", async () => {
-  await mount();
-  const before = localStorage.getItem("codex-switcher-theme");
-  syncReply = completed({ synced_at: "", needs_confirmation: true, preview: plan({ first_sync: true, to_local: { ...emptyChanges(), added: ["云端账号"] }, to_cloud: { ...emptyChanges(), updated: ["本机账号"] } }), ui: { theme: before === "dark" ? "light" : "dark" } });
-  await click("双向同步");
-  assert.equal(localStorage.getItem("codex-switcher-theme"), before);
-  assert.match(document.body.textContent, /从云端更新本机: 账号新增 1/);
-  assert.match(document.body.textContent, /从本机更新云端: 账号新增 0、修改 1/);
-  assert.match(document.body.textContent, /云端账号/);
-  const count = calls.filter(c => c.command === "sync_webdav").length;
-  await click("取消");
-  assert.equal(calls.filter(c => c.command === "sync_webdav").length, count);
-  assert.equal(service.davState.paused, true);
-  assert.equal(document.querySelector('[aria-label="同步预览"]'), null);
-});
 
-test("restoring a one-sided missing account requires a preview and confirmation", async () => {
-  await act(async () => service.resumeDavSync());
-  syncReply = completed();
-  await mount();
-  syncReply = completed({ needs_confirmation: true, synced_at: "", preview: plan({ restored_accounts: ["保留账号"], to_local: { ...emptyChanges(), added: ["保留账号"] } }) });
-  await click("双向同步");
-  assert.match(document.querySelector('[aria-label="同步预览"]').textContent, /保留账号/);
-  assert.match(document.body.textContent, /确认后会补回缺失的一边/);
-  assert.equal(service.davState.paused, true);
-  assert.equal(button("确认双向同步").disabled, false);
-  syncReply = completed();
-  await click("确认双向同步");
-  assert.equal(calls.filter(c => c.command === "sync_webdav").at(-1).args.confirmation, "preview-v1");
-  assert.equal(service.davState.paused, false);
-});
+
+
+
 
 test("automatic sync retries both configuration and sync failures on the next scheduled check", async () => {
   const timers = { timeout: window.setTimeout, interval: window.setInterval };
@@ -169,27 +124,7 @@ test("automatic sync retries both configuration and sync failures on the next sc
   }
 });
 
-test("one-way replacements are secondary actions with scoped deletion preview and recovery result", async () => {
-  for (const mode of ["upload", "download"]) {
-    await act(async () => service.resumeDavSync());
-    saved = { ...saved, sync_accounts: true, sync_settings: false };
-    await mount();
-    const title = mode === "upload" ? "用本机覆盖云端" : "用云端覆盖本机";
-    assert.equal(button(title), undefined);
-    await click("更多操作");
-    const replacement = plan({ mode, to_local: mode === "download" ? { ...emptyChanges(), deleted: ["本机独有账号"] } : emptyChanges(), to_cloud: mode === "upload" ? { ...emptyChanges(), deleted: ["云端独有账号"] } : emptyChanges() });
-    syncReply = completed({ synced_at: "", needs_confirmation: true, preview: replacement });
-    await click(title);
-    assert.equal(calls.filter(c => c.command === "sync_webdav").at(-1).args.mode, mode);
-    assert.equal(calls.filter(c => c.command === "sync_webdav").at(-1).args.confirmation, null);
-    assert.match(document.body.textContent, /目标端独有的所选内容也会被替换或删除/);
-    assert.equal(saved.sync_settings, false);
-    syncReply = completed({ preview: replacement, recovery_path: "C:\\public-test\\webdav-recovery.json" });
-    await click(`确认${title}`);
-    assert.equal(calls.filter(c => c.command === "sync_webdav").at(-1).args.confirmation, "preview-v1");
-    assert.match(document.body.textContent, /已保存操作前的恢复副本/);
-  }
-});
+
 
 test("editing one preference during sync preserves it and still applies independent cloud preferences", async () => {
   await act(async () => { localStorage.clear(); service.resumeDavSync(); });
@@ -272,4 +207,185 @@ test("reset-credit cache survives offline querying and expiry reduces the visibl
   await act(async () => { await new Promise(resolve=>setTimeout(resolve,2100)); });
   assert.match(document.body.textContent,/1 次重置/);
   assert.equal(accountCache.readResetCreditsCache(account.id).data.available_count,1);
+});
+
+
+test("cloud changes show one whole-copy dialog and one choice confirms immediately", async () => {
+  await act(async () => service.resumeDavSync());
+  await mount();
+  assert.doesNotMatch(document.body.textContent, /按上次成功同步的版本比较|更新时间保留较新|不传播单边删除/);
+  syncReply = completed({ needs_confirmation: true, synced_at: "", preview: plan() });
+  await click("立即同步");
+  assert.ok(document.querySelector('dialog[open]'));
+  assert.ok(button("使用本地"));
+  assert.ok(button("使用云端"));
+  syncReply = completed();
+  await click("使用云端");
+  const args = calls.filter(c => c.command === "sync_webdav").at(-1).args;
+  assert.equal(args.choice, "remote");
+  assert.equal(args.confirmation, "preview-v1");
+  assert.equal(document.querySelector('dialog'), null);
+  assert.equal(service.davState.paused, false);
+});
+
+test("automatic cloud change prompts outside settings, cancel writes nothing and blocks repeat prompts", async () => {
+  await act(async () => { service.resumeDavSync(); root.render(createElement(WebDavSyncDialog)); });
+  syncReply = completed({ needs_confirmation: true, synced_at: "", preview: plan() });
+  await act(async () => service.runDavSync({ automatic: true }));
+  assert.ok(document.querySelector('dialog[open]'));
+  const before = calls.filter(c => c.command === "sync_webdav").length;
+  await click("取消");
+  assert.equal(calls.filter(c => c.command === "sync_webdav").length, before);
+  assert.equal(service.davState.paused, true);
+  assert.equal(document.querySelector('dialog'), null);
+});
+
+test("changed confirmation data keeps the choice dialog open for a fresh decision", async () => {
+  await act(async () => service.resumeDavSync());
+  await mount();
+  syncReply = completed({ needs_confirmation: true, synced_at: "", preview: plan() });
+  await click("立即同步");
+  syncReply = completed({ needs_confirmation: true, synced_at: "", preview: plan({ token: "changed-cloud" }) });
+  await click("使用本地");
+  assert.ok(document.querySelector('dialog[open]'));
+  assert.equal(service.davState.paused, true);
+  syncReply = completed();
+  await click("使用本地");
+  assert.equal(calls.filter(c => c.command === "sync_webdav").at(-1).args.confirmation, "changed-cloud");
+});
+
+test("choosing cloud replaces newer local caches with the chosen copy", async () => {
+  const account = cachedAccount("chosen-cloud");
+  accountCache.writeAccountCache([{ ...account, usage: quota(account.id, 7, "2026-10-19T12:00:00Z") }]);
+  quotaSync.replaceAccountSyncCaches([account], { [account.id]: { usage: { ...quota(account.id, 90, "2026-10-19T10:00:00Z") } } });
+  assert.equal(accountCache.readAccountCache()[0].usage.primary_used_percent, 90);
+  quotaSync.replaceAccountSyncCaches([account], {});
+  assert.equal(accountCache.readAccountCache()[0].usage, undefined);
+});
+
+
+test("sync interval defaults to thirty minutes and can be saved", async () => {
+  await act(async () => service.resumeDavSync());
+  syncReply = completed();
+  await mount();
+  const input = document.querySelector('input[aria-label="自动同步间隔（分钟）"]');
+  assert.equal(input.value, "30");
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(dom.window.HTMLInputElement.prototype, "value").set.call(input, "45");
+    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  });
+  await click("保存设置");
+  assert.equal(saved.auto_sync_interval_minutes, 45);
+});
+
+test("automatic timer follows the saved interval and reconfigures without restarting", async () => {
+  const timers = { timeout: window.setTimeout, interval: window.setInterval, clear: window.clearInterval };
+  const delays = [];
+  let dispose;
+  window.setTimeout = () => -1;
+  window.setInterval = (callback, delay) => { delays.push(delay); return -2; };
+  window.clearInterval = () => {};
+  try {
+    saved = { ...saved, auto_sync_interval_minutes: 45 };
+    dispose = service.startDavAutoSync();
+    await act(async () => { await Promise.resolve(); });
+    assert.equal(delays[0], 30 * 60_000);
+    assert.equal(delays.at(-1), 45 * 60_000);
+    saved = { ...saved, auto_sync_interval_minutes: 120 };
+    await act(async () => window.dispatchEvent(new Event(service.DAV_CONFIG_CHANGED_EVENT)));
+    assert.equal(delays.at(-1), 120 * 60_000);
+  } finally {
+    dispose?.();
+    window.setTimeout = timers.timeout;
+    window.setInterval = timers.interval;
+    window.clearInterval = timers.clear;
+  }
+});
+
+
+test("manual replacements show the chosen direction and require confirmation", async () => {
+  for (const [mode, title] of [["upload", "本地覆盖云端"], ["download", "云端覆盖本地"]]) {
+    await act(async () => service.resumeDavSync());
+    await mount();
+    syncReply = completed({ needs_confirmation: true, synced_at: "", preview: plan({ mode }) });
+    await click(title);
+    const first = calls.filter(c => c.command === "sync_webdav").at(-1).args;
+    assert.equal(first.mode, mode);
+    assert.equal(first.confirmation, null);
+    assert.match(document.querySelector("dialog").textContent, new RegExp(`确认${title}`));
+    assert.ok(button("确认覆盖"));
+    assert.equal(button("使用本地"), undefined);
+    syncReply = completed({ preview: plan({ mode }) });
+    await click("确认覆盖");
+    const confirmed = calls.filter(c => c.command === "sync_webdav").at(-1).args;
+    assert.equal(confirmed.mode, mode);
+    assert.equal(confirmed.confirmation, "preview-v1");
+    assert.equal(confirmed.choice, null);
+  }
+});
+
+
+test("header sync runs immediately, shows a sync icon and reuses cloud choice", async () => {
+  let settings = 0;
+  saved = { ...saved, server: "https://example.com/dav/", sync_accounts: true };
+  syncReply = completed({ needs_confirmation: true, synced_at: "", preview: plan() });
+  await act(async () => {
+    service.resumeDavSync();
+    root.render(createElement(Fragment, null, createElement(WebDavSyncButton, { onOpenSettings: () => settings++ }), createElement(WebDavSyncDialog)));
+  });
+  const button = document.querySelector('button[aria-label="立即同步"]');
+  assert.ok(button.querySelector("svg"));
+  assert.equal(button.textContent, "");
+  const before = calls.filter(c => c.command === "sync_webdav").length;
+  await act(async () => button.click());
+  await settle();
+  assert.equal(calls.filter(c => c.command === "sync_webdav").length, before + 1);
+  assert.ok(document.querySelector("dialog[open]"));
+  assert.equal(settings, 0);
+  await click("取消");
+});
+
+test("header sync opens configuration if WebDAV is not configured", async () => {
+  let settings = 0;
+  saved = { ...saved, server: "" };
+  await act(async () => { service.resumeDavSync(); root.render(createElement(WebDavSyncButton, { onOpenSettings: () => settings++ })); });
+  const before = calls.filter(c => c.command === "sync_webdav").length;
+  await act(async () => document.querySelector('button[aria-label="立即同步"]').click());
+  await settle();
+  assert.equal(settings, 1);
+  assert.equal(calls.filter(c => c.command === "sync_webdav").length, before);
+});
+
+
+test("sync completion never displays legacy recovery-copy details", async () => {
+  saved = { ...saved, server: "https://example.com/dav/", sync_accounts: true };
+  await act(async () => service.resumeDavSync());
+  await mount();
+  syncReply = completed({ recovery_path: "C:/private/legacy-recovery.json" });
+  await click("立即同步");
+  assert.doesNotMatch(document.body.textContent, /legacy-recovery|恢复副本/);
+});
+
+
+test("manual sync reports success and failure, but pending choices and background runs stay quiet", async () => {
+  const notices = [];
+  const listener = event => notices.push(event.detail);
+  window.addEventListener(service.DAV_NOTICE_EVENT, listener);
+  try {
+    syncReply = completed();
+    await act(async () => service.runDavSync());
+    assert.match(notices.at(-1).message, /同步成功/);
+    assert.equal(notices.at(-1).isError, false);
+    syncReply = () => { throw new Error("network unavailable"); };
+    await act(async () => service.runDavSync());
+    assert.match(notices.at(-1).message, /同步失败/);
+    assert.equal(notices.at(-1).isError, true);
+    const count = notices.length;
+    syncReply = completed({ needs_confirmation: true, synced_at: "" });
+    await act(async () => service.runDavSync());
+    assert.equal(notices.length, count);
+    syncReply = completed();
+    await act(async () => service.runDavSync({ automatic: true }));
+    assert.equal(notices.length, count);
+  } finally { window.removeEventListener(service.DAV_NOTICE_EVENT, listener); }
 });

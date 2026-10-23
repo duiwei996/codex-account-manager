@@ -18,6 +18,7 @@ interface AccountCardProps {
   onWarmup: () => Promise<void>;
   onDelete: () => void;
   onExport: () => void;
+  onToggleRisk: () => Promise<void>;
   onRefresh: () => Promise<unknown>;
   onRename: (newName: string) => Promise<void>;
   readOnly?: boolean;
@@ -110,6 +111,7 @@ export function AccountCard({
   onWarmup,
   onDelete,
   onExport,
+  onToggleRisk,
   onRefresh,
   onRename,
   switching,
@@ -207,7 +209,7 @@ export function AccountCard({
   const loadResetCredits = useCallback(async () => {
     const requestId = ++resetRequestSeq.current;
 
-    if (account.credentials_invalid || account.auth_mode !== "chat_g_p_t") {
+    if (account.risk_controlled || account.credentials_invalid || account.auth_mode !== "chat_g_p_t") {
       setResetCredits(account.auth_mode === "chat_g_p_t" ? readResetCreditsCache(account.id)?.data ?? null : null);
       return;
     }
@@ -223,7 +225,7 @@ export function AccountCard({
       if (requestId !== resetRequestSeq.current) return;
       setResetCredits(readResetCreditsCache(account.id)?.data ?? null);
     }
-  }, [account.auth_mode, account.id, account.credentials_invalid]);
+  }, [account.auth_mode, account.id, account.credentials_invalid, account.risk_controlled]);
 
   const handleStatsLoaded = useCallback(
     (stats: AccountUsageStatsInfo | null) => {
@@ -405,6 +407,7 @@ export function AccountCard({
         </div>
         <div className="flex flex-wrap gap-2">
         <button onClick={handleRefresh} disabled={isRefreshing || account.credentials_invalid} title={t("Refresh usage")} aria-label={t("Refresh usage")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-wait disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-blue-900/20"><ActionIcon name="refresh" spinning={isRefreshing} /></button>
+        <button disabled={readOnly} onClick={() => void onToggleRisk()} title={t(account.risk_controlled ? "Move out of risk control" : "Move to risk control")} aria-label={t(account.risk_controlled ? "Move out of risk control" : "Move to risk control")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300 hover:brightness-95 disabled:opacity-50"><ActionIcon name={account.risk_controlled ? "risk-remove" : "risk-add"} /></button>
         <button onClick={onExport} disabled={readOnly || !desktopActions} title={t("Export JSON")} aria-label={t("Export JSON")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300 hover:brightness-95 disabled:opacity-50"><ActionIcon name="export" /></button>
         <button onClick={() => void onWarmup()} disabled={!desktopActions || warmingUp} title={t("Send warm-up")} aria-label={t("Send warm-up")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-700 dark:bg-amber-900/20 hover:brightness-95 disabled:opacity-50"><ActionIcon name="warmup" /></button>
         <button onClick={() => setStatsOpen(true)} title={t("Usage statistics")} aria-label={t("Usage statistics")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-600 hover:bg-blue-50 hover:text-blue-600 dark:bg-gray-800 dark:text-gray-300"><ActionIcon name="stats" /></button>
@@ -416,7 +419,7 @@ export function AccountCard({
         accountId={account.id}
         accountName={masked ? t("Usage statistics") : account.name}
         onClose={closeStats}
-        enabled={!account.credentials_invalid && account.auth_mode === "chat_g_p_t"}
+        enabled={!account.risk_controlled && !account.credentials_invalid && account.auth_mode === "chat_g_p_t"}
         open={statsOpen}
         usage={account.usage}
         usageLoading={account.usageLoading}

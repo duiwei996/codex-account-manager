@@ -19,9 +19,9 @@ function AccountTransferForm({open: visible,mode: initialMode,accountId,accounts
   const [category, setCategory] = useState("all");
   const [accountStatus, setAccountStatus] = useState("valid");
   const filters = { category: accountId ? "all" : category, accountStatus: accountId ? "all" : accountStatus };
-  const categories = groupAccountsByPlan(accounts, true);
+  const categories = groupAccountsByPlan(accounts.filter(a => !a.risk_controlled), true);
   const categoryLabel = (key: string) => key === "api_key" ? label("API Key 账号", "API key accounts") :
-    key === "unknown" ? label("未知套餐", "Unknown plan") : key === "free" ? label("免费账号", "Free accounts") : key;
+    key === "unknown" ? label("未知套餐", "Unknown plan") : key === "free" ? label("免费", "Free") : key === "team" ? label("团队", "Team") : key;
   const [documents,setDocuments] = useState<ExportDocument[]>([]);
   const [reveal,setReveal] = useState(false);
   const [payload,setPayload] = useState("");

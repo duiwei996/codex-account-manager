@@ -1,6 +1,7 @@
 import type { AccountInfo } from "../types";
 
 export function getAccountPlanKey(account: AccountInfo) {
+  if (account.risk_controlled) return "risk";
   return account.auth_mode === "api_key"
     ? "api_key"
     : account.plan_type?.trim().toLowerCase() || "unknown";
@@ -26,8 +27,8 @@ export function groupAccountsByPlan<T extends AccountInfo>(accounts: readonly T[
 /** The account in use stays pinned independently of the selected category. */
 export function selectAccountPanel<T extends AccountInfo>(accounts: readonly T[], selectedPlan: string) {
   return {
-    currentAccount: accounts.find(account => account.is_active),
+    currentAccount: accounts.find(account => account.is_active && (selectedPlan === "risk" ? account.risk_controlled : !account.risk_controlled)),
     otherAccounts: accounts.filter(account => !account.is_active &&
-      (selectedPlan === "all" || getAccountPlanKey(account) === selectedPlan)),
+      (selectedPlan === "all" ? !account.risk_controlled : getAccountPlanKey(account) === selectedPlan)),
   };
 }

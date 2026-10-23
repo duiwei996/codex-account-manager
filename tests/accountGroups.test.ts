@@ -60,3 +60,21 @@ test("current account remains pinned in every category and never repeats in the 
   }
   assert.equal(selectAccountPanel(accounts.filter(a => !a.is_active), "team").currentAccount, undefined);
 });
+
+
+test("risk isolation excludes active and inactive accounts from ordinary panels and restores their plans", () => {
+  const accounts = [
+    { id: "active", plan_type: "free", is_active: true, risk_controlled: true },
+    { id: "risk", plan_type: "team", is_active: false, risk_controlled: true },
+    { id: "normal", plan_type: "team", is_active: false },
+  ] as AccountInfo[];
+  assert.equal(selectAccountPanel(accounts, "all").currentAccount, undefined);
+  assert.deepEqual(selectAccountPanel(accounts, "all").otherAccounts.map(a => a.id), ["normal"]);
+  assert.deepEqual(selectAccountPanel(accounts, "team").otherAccounts.map(a => a.id), ["normal"]);
+  assert.equal(selectAccountPanel(accounts, "risk").currentAccount?.id, "active");
+  assert.deepEqual(selectAccountPanel(accounts, "risk").otherAccounts.map(a => a.id), ["risk"]);
+  assert.equal(getAccountPlanKey(accounts[1]), "risk");
+  accounts[1].risk_controlled = false;
+  assert.equal(getAccountPlanKey(accounts[1]), "team");
+  assert.deepEqual(selectAccountPanel(accounts, "team").otherAccounts.map(a => a.id), ["risk", "normal"]);
+});

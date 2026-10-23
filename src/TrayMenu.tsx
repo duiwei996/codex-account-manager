@@ -141,7 +141,7 @@ function TrayMenu() {
       console.error("Failed to sync native menu language:", error);
     });
   }, [locale]);
-  const [accounts, setAccounts] = useState<AccountInfo[]>(readAccountCache);
+  const [accounts, setAccounts] = useState<AccountInfo[]>(() => readAccountCache().filter(a => !a.risk_controlled));
   const [loading, setLoading] = useState(true);
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -239,7 +239,7 @@ function TrayMenu() {
   const load = useCallback(async (refresh = true) => {
     try {
       void loadDockDisplayMode();
-      const list = await invokeBackend<AccountInfo[]>("list_accounts");
+      const list = (await invokeBackend<AccountInfo[]>("list_accounts")).filter(a => !a.risk_controlled);
       setAccounts(list);
       setUsageById((prev) => retainUsageForAccounts(prev, list));
       setError(null);
@@ -259,7 +259,7 @@ function TrayMenu() {
   const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      const list = await invokeBackend<AccountInfo[]>("list_accounts");
+      const list = (await invokeBackend<AccountInfo[]>("list_accounts")).filter(a => !a.risk_controlled);
       setAccounts(list);
       setUsageById((prev) => retainUsageForAccounts(prev, list));
       setError(null);

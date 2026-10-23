@@ -83,6 +83,9 @@ impl Default for AppSettings {
 
 impl AppSettings {
     pub fn includes_category(&self, account: &StoredAccount) -> bool {
+        if account.risk_controlled || self.selected_plan_tab == "risk" {
+            return account.risk_controlled && self.selected_plan_tab == "risk";
+        }
         let key = if matches!(account.auth_mode, AuthMode::ApiKey) {
             "api_key".to_owned()
         } else {
@@ -98,7 +101,9 @@ impl AppSettings {
     }
 
     pub fn should_refresh(&self, account: &StoredAccount, active_id: Option<&str>) -> bool {
-        !account.credentials_invalid
+        !account.risk_controlled
+            && !account.credentials_invalid
+            && self.selected_plan_tab != "risk"
             && match self.refresh_scope {
                 RefreshScope::Current => active_id == Some(account.id.as_str()),
                 RefreshScope::Category => {
@@ -131,6 +136,8 @@ impl Default for AccountsStore {
 /// A stored account with all its metadata and credentials
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredAccount {
+    #[serde(default)]
+    pub risk_controlled: bool,
     /// Unique identifier (UUID)
     pub id: String,
     /// User-defined display name
@@ -203,6 +210,7 @@ impl StoredAccount {
             credentials_updated_at: None,
             sync_updated_at: Some(created_at),
             credentials_invalid: false,
+            risk_controlled: false,
         }
     }
 
@@ -237,6 +245,7 @@ impl StoredAccount {
             credentials_updated_at: None,
             sync_updated_at: Some(created_at),
             credentials_invalid: false,
+            risk_controlled: false,
         }
     }
 }
@@ -421,6 +430,8 @@ pub struct TokenData {
 /// Account info sent to the frontend (without sensitive data)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountInfo {
+    #[serde(default)]
+    pub risk_controlled: bool,
     pub id: String,
     pub name: String,
     pub email: Option<String>,
@@ -436,6 +447,7 @@ pub struct AccountInfo {
 impl AccountInfo {
     pub fn from_stored(account: &StoredAccount, active_id: Option<&str>) -> Self {
         Self {
+            risk_controlled: account.risk_controlled,
             id: account.id.clone(),
             name: account.name.clone(),
             email: account.email.clone(),
@@ -658,5 +670,39 @@ impl std::fmt::Debug for AuthDotJson {
 impl std::fmt::Debug for TokenData {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("TokenData([REDACTED])")
+    }
+}
+
+#[cfg(test)]
+mod risk_control_tests {
+    use super::*;
+
+    #[test]
+    fn risk_is_persistent_and_excluded_from_normal_categories_and_polling() {
+        let mut account = StoredAccount::new_api_key("test".into(), "test-key".into());
+        let all = AppSettings::default();
+        assert!(all.includes_category(&account));
+        account.risk_controlled = true;
+        let saved = serde_json::to_value(&account).unwrap();
+        let restored: StoredAccount = serde_json::from_value(saved.clone()).unwrap();
+        assert!(restored.risk_controlled);
+        assert!(!all.includes_category(&restored));
+        assert!(!all.should_refresh(&restored, Some(&restored.id)));
+        let risk = AppSettings {
+            selected_plan_tab: "risk".into(),
+            ..Default::default()
+        };
+        assert!(risk.includes_category(&restored));
+        assert!(!risk.should_refresh(&restored, Some(&restored.id)));
+        let mut legacy = saved;
+        legacy.as_object_mut().unwrap().remove("risk_controlled");
+        assert!(
+            !serde_json::from_value::<StoredAccount>(legacy)
+                .unwrap()
+                .risk_controlled
+        );
+        account.risk_controlled = false;
+        assert!(all.includes_category(&account));
+        assert!(all.should_refresh(&account, None));
     }
 }

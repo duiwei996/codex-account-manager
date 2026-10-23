@@ -39,7 +39,10 @@ export default {
   "Checks automatically at startup and every 6 hours.": "Checks automatically at startup and every 6 hours.",
   "Account types": "Account types",
   "Current": "Current",
-  "Free accounts": "Free accounts",
+  "Risk control": "Risk control",
+  "Move to risk control": "Move to risk control",
+  "Move out of risk control": "Move out of risk control",
+  "Free accounts": "Free",
   "API key accounts": "API key accounts",
   "Unknown plan": "Unknown plan",
 

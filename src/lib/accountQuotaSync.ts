@@ -37,3 +37,20 @@ export function applyAccountSyncCaches(accounts: AccountInfo[], caches: Record<s
   writeAccountCache(next);
   window.dispatchEvent(new Event(ACCOUNT_QUOTA_CHANGED_EVENT));
 }
+
+
+/** An explicit whole-cloud choice replaces observations too, regardless of local age. */
+export function replaceAccountSyncCaches(accounts: AccountInfo[], caches: Record<string, AccountSyncCache>): void {
+  const next: AccountWithUsage[] = accounts.map(account => {
+    const cache = caches[account.id];
+    const data: AccountResetCredits = { available_count: 0, next_expires_at: null,
+      credits: (cache?.resets?.credits ?? []).map(c => ({ ...c, status: "available", reset_type: "", granted_at: null, redeemed_at: null, redeem_started_at: null, description: null })) };
+    writeResetCreditsCache(account.id, data, cache?.resets?.recorded_at ?? new Date().toISOString(), true);
+    return { ...account, subscription_expires_at: cache?.metadata?.subscription_expires_at ?? null,
+      metadata_recorded_at: cache?.metadata?.recorded_at,
+      usage: cache?.usage ? cleanUsage({ ...cache.usage, account_id: account.id, plan_type: account.plan_type }, account.id) : undefined,
+      usageLoading: false };
+  });
+  writeAccountCache(next, true);
+  window.dispatchEvent(new Event(ACCOUNT_QUOTA_CHANGED_EVENT));
+}

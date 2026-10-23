@@ -91,7 +91,7 @@ fn documents_for_accounts(
         ..Default::default()
     };
     let matches_filters = |account: &StoredAccount| {
-        settings.includes_category(account)
+        (account_id.is_some() || settings.includes_category(account))
             && match account_status {
                 "valid" => !account.credentials_invalid,
                 "invalid" => account.credentials_invalid,
@@ -495,6 +495,22 @@ mod tests {
             Some("synthetic-account".into()),
         )
     }
+    #[test]
+    fn risk_accounts_are_excluded_from_all_and_plan_exports() {
+        let mut isolated = account();
+        isolated.risk_controlled = true;
+        for format in ["all", "official", "cpa"] {
+            assert!(
+                documents_for_accounts(&[isolated.clone()], format, None, "all", "all").is_err()
+            );
+            assert!(
+                documents_for_accounts(&[isolated.clone()], format, None, "team", "all").is_err()
+            );
+        }
+        isolated.risk_controlled = false;
+        assert!(documents_for_accounts(&[isolated], "all", None, "team", "all").is_ok());
+    }
+
     #[test]
     fn official_and_cpa_roundtrip_preserve_tokens_and_refresh_timestamp() {
         let mut account = account();

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createDraftRelease } from "../scripts/create-draft-release.mjs";
+import { createDraftRelease, readReleaseNotes } from "../scripts/create-draft-release.mjs";
 
 const input = {
   version: "1.0.4", repository: "duiwei996/codex-account-manager",
@@ -50,4 +50,16 @@ test("creation failures propagate without retrying or creating another draft", (
   let calls = 0;
   assert.throws(() => createDraftRelease(input, () => { calls++; throw new Error("HTTP 403"); }), /HTTP 403/);
   assert.equal(calls, 1);
+});
+
+
+test("draft release uses only the requested changelog entry", () => {
+  const notes = readReleaseNotes("1.1.1", "# Changes\n\n## 1.1.1 · 2026-10-23\n\n- New sync.\n\n## 1.1.0\n\n- Old sync.");
+  assert.equal(notes, "- New sync.");
+  assert.throws(() => readReleaseNotes("1.1.2", "## 1.1.1\n- Note"), /Missing/);
+  createDraftRelease({ ...input, notes }, (_endpoint, payload) => {
+    assert.match(payload.body, /^- New sync\./);
+    assert.doesNotMatch(payload.body, /Old sync/);
+    return response();
+  });
 });

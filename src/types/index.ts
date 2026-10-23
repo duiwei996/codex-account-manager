@@ -4,6 +4,7 @@ export type AuthMode = "api_key" | "chat_g_p_t";
 export type DockDisplayMode = "show_in_dock" | "menu_bar_only";
 
 export interface AccountInfo {
+  risk_controlled?: boolean;
   id: string;
   name: string;
   email: string | null;

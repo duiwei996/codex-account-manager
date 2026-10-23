@@ -1,5 +1,7 @@
+import { WebDavSyncButton } from "./components/WebDavSyncButton";
+import { WebDavSyncDialog } from "./components/WebDavSyncDialog";
 import { CenteredSelect } from "./components/CenteredSelect";
-import { DAV_STATE_EVENT, davState, startDavAutoSync } from "./lib/webdav";
+import { DAV_NOTICE_EVENT, DAV_STATE_EVENT, davState, startDavAutoSync } from "./lib/webdav";
 import { groupAccountsByPlan, selectAccountPanel } from "./lib/accountGroups";
 import { selectRefreshAccounts } from "./lib/refreshPolicy";
 import { ActionIcon } from "./components/ActionIcon";
@@ -371,8 +373,9 @@ function App() {
   }, [autoWarmupAccountIds]);
 
   const handleTitlebarDrag = useCallback(
-    (event: React.MouseEvent<HTMLDivElement>) => {
+    (event: React.MouseEvent<HTMLElement>) => {
       if (!isTauriRuntime() || event.button !== 0) return;
+      if ((event.target as HTMLElement).closest("button, input, select, textarea, a, [role=button]")) return;
       void getTauriWindow()?.startDragging();
     },
     []
@@ -567,6 +570,15 @@ function App() {
     setWarmupToast({ message, isError });
     toastTimerRef.current = setTimeout(() => setWarmupToast(null), isError ? 10000 : 2500);
   }, []);
+
+  useEffect(() => {
+    const notice = (event: Event) => {
+      const { message, isError } = (event as CustomEvent<{ message: string; isError: boolean }>).detail;
+      showWarmupToast(message, isError);
+    };
+    window.addEventListener(DAV_NOTICE_EVENT, notice);
+    return () => window.removeEventListener(DAV_NOTICE_EVENT, notice);
+  }, [showWarmupToast]);
 
   const formatWarmupError = useCallback((err: unknown) => {
     if (!err) return t("Unknown error");
@@ -1087,10 +1099,10 @@ function App() {
     : "";
   const selectedPlanTab = runtimePreferences.preferences.selected_plan_tab;
   const setSelectedPlanTab = (key: string) => { void runtimePreferences.change({ selected_plan_tab: key }); };
-  const planTabs = useMemo(() => groupAccountsByPlan(accounts, true), [accounts]);
+  const planTabs = useMemo(() => groupAccountsByPlan(accounts.filter(a => !a.risk_controlled), true), [accounts]);
   const effectivePlanTab = selectedPlanTab;
   useEffect(() => {
-    if (listReady && runtimePreferences.ready && selectedPlanTab !== "all" && !planTabs.some(tab => tab.key === selectedPlanTab)) {
+    if (listReady && runtimePreferences.ready && selectedPlanTab !== "all" && selectedPlanTab !== "risk" && !planTabs.some(tab => tab.key === selectedPlanTab)) {
       void runtimePreferences.change({ selected_plan_tab: "all" });
     }
   }, [listReady, runtimePreferences.ready, runtimePreferences.change, selectedPlanTab, planTabs]);
@@ -1099,7 +1111,7 @@ function App() {
   const visibleAccounts = accountPanel.otherAccounts.filter(account => matchesAccountSearch(account, normalizedAccountSearchQuery));
   const hasNoMatchingAccounts = !currentAccount && visibleAccounts.length === 0;
   const getPlanTabLabel = (key: string) => key === "all" ? t("All") : key === "free" ? t("Free accounts") :
-    key === "api_key" ? t("API key accounts") : key === "unknown" ? t("Unknown plan") : key;
+    key === "risk" ? t("Risk control") : key === "team" ? t("Team") : key === "api_key" ? t("API key accounts") : key === "unknown" ? t("Unknown plan") : key;
 
   const renderAccountCard = (account: AccountWithUsage) => (
     <AccountCard
@@ -1112,6 +1124,12 @@ function App() {
                       onRelogin={() => handleRelogin(account)}
                       onWarmup={() => handleWarmupAccount(account.id, account.name)}
                       onDelete={() => handleDelete(account.id)}
+                      onToggleRisk={async () => {
+                        try {
+                          await invokeBackend("set_account_risk_control", { accountId: account.id, riskControlled: !account.risk_controlled });
+                          await loadAccounts(true);
+                        } catch (error) { window.alert(String(error)); }
+                      }}
                       onExport={() => openTransfer("export", account.id)}
                       onRefresh={() =>
                         refreshSingleUsage(account.id, { refreshMetadata: true })
@@ -1143,10 +1161,9 @@ function App() {
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 dark:bg-gray-950 dark:text-gray-100">
       <WindowResizeBorders isMaximized={isWindowMaximized} />
-      <header className="sticky top-0 z-40 border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
+      <header onMouseDown={handleTitlebarDrag} className="sticky top-0 z-40 border-b border-gray-200 bg-white dark:border-gray-800 dark:bg-gray-900">
         <div className="flex h-9 items-center bg-white px-3 dark:bg-gray-900">
           <div
-            onMouseDown={handleTitlebarDrag}
             onDoubleClick={handleTitlebarDoubleClick}
             className={`h-full flex-1 select-none cursor-default ${isMacOs ? "ml-18 mr-2" : "mr-3"}`}
           />
@@ -1281,6 +1298,7 @@ function App() {
               >
                 <ActionIcon name="refresh" spinning={isRefreshing} />
               </button>
+              <WebDavSyncButton onOpenSettings={() => { setSettingsInitialSection("sync"); setIsSettingsOpen(true); }} />
               <button disabled={!isTauriRuntime()} onClick={() => openTransfer("import")} title={t("Import / Export")} aria-label={t("Import / Export")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-gray-200 bg-white text-gray-600 hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300"><ActionIcon name="transfer" /></button>
               <button
                 onClick={() => setIsSettingsOpen(true)}
@@ -1337,7 +1355,7 @@ function App() {
         ) : (
           <div className="space-y-4">
             <div role="tablist" aria-label={t("Account types")} className="flex gap-2 overflow-x-auto pb-1">
-              {["all", ...planTabs.map(tab => tab.key)].map(key => (
+              {["all", ...planTabs.map(tab => tab.key), "risk"].map(key => (
                 <button key={key} type="button" role="tab" aria-selected={effectivePlanTab === key}
                   aria-controls="account-tab-panel" id={`account-tab-${key}`}
                   tabIndex={effectivePlanTab === key ? 0 : -1}
@@ -1345,7 +1363,7 @@ function App() {
                   onKeyDown={event => {
                     if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
                     event.preventDefault();
-                    const keys = ["all", ...planTabs.map(tab => tab.key)];
+                    const keys = ["all", ...planTabs.map(tab => tab.key), "risk"];
                     const index = keys.indexOf(key);
                     const next = event.key === "Home" ? 0 : event.key === "End" ? keys.length - 1 :
                       (index + (event.key === "ArrowRight" ? 1 : -1) + keys.length) % keys.length;
@@ -1611,6 +1629,7 @@ function App() {
 
       {/* Import/Export Config Modal */}
       <AccountTransferModal open={isConfigModalOpen} mode={transferMode} accountId={exportAccountId} accounts={accounts} onClose={() => setIsConfigModalOpen(false)} onImported={async (summary) => {const list = await loadAccounts(true);await refreshUsage(list.filter(account => summary.affected_account_ids.includes(account.id)), { refreshMetadata: true });}} />
+      <WebDavSyncDialog />
       <UpdateChecker updater={updater} settingsOpen={isSettingsOpen} />
 
     </div>

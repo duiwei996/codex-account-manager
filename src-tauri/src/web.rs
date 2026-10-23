@@ -240,7 +240,8 @@ fn web_command_allowed(command: &str, allow_writes: bool) -> bool {
     ) || (allow_writes
         && matches!(
             command,
-            "rename_account"
+            "set_account_risk_control"
+                | "rename_account"
                 | "delete_account"
                 | "switch_account"
                 | "set_masked_account_ids"
@@ -251,6 +252,19 @@ fn web_command_allowed(command: &str, allow_writes: bool) -> bool {
 
 async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, String> {
     match command {
+        "set_account_risk_control" => {
+            #[derive(serde::Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Args {
+                account_id: String,
+                risk_controlled: bool,
+            }
+            let args: Args = parse_args(payload)?;
+            to_json(
+                crate::commands::set_account_risk_control(args.account_id, args.risk_controlled)
+                    .await?,
+            )
+        }
         "list_accounts" => to_json(list_accounts().await?),
         "get_active_account_info" => to_json(get_active_account_info().await?),
         "add_account_from_auth_json_text" => {

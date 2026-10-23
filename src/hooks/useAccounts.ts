@@ -112,7 +112,7 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
   }, []);
 
   useEffect(() => {
-    const updated = () => { void loadAccounts(true); };
+    const updated = () => { setAccounts(readAccountCache()); void loadAccounts(true); };
     window.addEventListener(ACCOUNT_QUOTA_CHANGED_EVENT,updated);
     return () => window.removeEventListener(ACCOUNT_QUOTA_CHANGED_EVENT,updated);
   }, [loadAccounts]);
@@ -121,7 +121,7 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
     async (
       accountList?: AccountInfo[] | AccountWithUsage[]
     ) => {
-      const list = (accountList ?? accountsRef.current).filter(account => !account.credentials_invalid);
+      const list = (accountList ?? accountsRef.current).filter(account => !account.risk_controlled && !account.credentials_invalid);
       const dueAccounts = list.filter(
         (account) => !metadataRefreshInFlightRef.current.has(account.id)
       );
@@ -169,7 +169,7 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
       options?: { refreshMetadata?: boolean }
     ) => {
       try {
-        const list = (accountList ?? accountsRef.current).filter(account => !account.credentials_invalid);
+        const list = (accountList ?? accountsRef.current).filter(account => !account.risk_controlled && !account.credentials_invalid);
         if (list.length === 0) {
           return;
         }
