@@ -70,7 +70,7 @@ jobs:
           cache-on-failure: false
 
       - name: Install the pinned dependency auditor
-        run: cargo install cargo-audit --locked --version 0.22.1
+        run: bash scripts/ensure-cargo-audit.sh
 
       - name: Rust checks shared with local builds
         run: pnpm check:rust
