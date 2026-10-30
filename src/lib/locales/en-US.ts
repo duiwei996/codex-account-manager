@@ -1,4 +1,5 @@
 export default {
+  "Team pay-as-you-go": "Team pay-as-you-go",
   "WebDAV Sync": "WebDAV Sync",
   "WebDAV sync is available in the desktop app.": "WebDAV sync is available in the desktop app.",
   "Login expired": "Login expired",

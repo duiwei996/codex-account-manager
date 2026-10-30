@@ -199,7 +199,12 @@ pub fn update_app_settings<T>(operation: impl FnOnce(&mut AppSettings) -> Result
     })
 }
 
-/// Email plus plan identifies a login entry; never merge different plans.
+fn normalized_plan(plan: Option<&str>) -> String {
+    let key = plan.unwrap_or("").trim().to_lowercase();
+    key
+}
+
+/// Match the same plan while keeping distinct workspaces separate.
 pub(crate) fn same_account_type(a: &StoredAccount, b: &StoredAccount) -> bool {
     match (&a.auth_data, &b.auth_data) {
         (AuthData::ApiKey { key: a }, AuthData::ApiKey { key: b }) => a == b,
@@ -215,14 +220,12 @@ pub(crate) fn same_account_type(a: &StoredAccount, b: &StoredAccount) -> bool {
                 ..
             },
         ) => {
-            let plan = |account: &StoredAccount| {
-                account
-                    .plan_type
-                    .as_deref()
-                    .unwrap_or("")
-                    .trim()
-                    .to_lowercase()
-            };
+            let plan = |account: &StoredAccount| normalized_plan(account.plan_type.as_deref());
+            if let (Some(aid), Some(bid)) = (aid.as_deref(), bid.as_deref()) {
+                if !aid.is_empty() && !bid.is_empty() && aid != bid {
+                    return false;
+                }
+            }
             if plan(a) != plan(b) {
                 return false;
             }
@@ -440,6 +443,27 @@ mod account_merge_tests {
             Some("workspace".into()),
         )
     }
+    #[test]
+    fn expired_usage_based_relogin_preserves_record_and_workspace_identity() {
+        let mut store = AccountsStore::default();
+        let old =
+            upsert_account(&mut store, login("self_serve_business_usage_based", "old")).unwrap();
+        store.accounts[0].credentials_invalid = true;
+        let replaced =
+            upsert_account(&mut store, login("self_serve_business_usage_based", "new")).unwrap();
+        assert_eq!(old.id, replaced.id);
+        assert!(!replaced.credentials_invalid);
+        assert_eq!(store.accounts.len(), 1);
+        assert!(!same_account_type(&replaced, &login("team", "other")));
+        let mut other = login("self_serve_business_usage_based", "other");
+        if let AuthData::ChatGPT { account_id, .. } = &mut other.auth_data {
+            *account_id = Some("other-workspace".into());
+        }
+        assert!(!same_account_type(&replaced, &other));
+        upsert_account(&mut store, other).unwrap();
+        assert_eq!(store.accounts.len(), 2);
+    }
+
     #[test]
     fn same_email_different_plans_survive_and_matching_plan_replaces_credentials() {
         let mut store = AccountsStore::default();

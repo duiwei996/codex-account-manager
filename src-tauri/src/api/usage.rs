@@ -139,6 +139,26 @@ pub async fn warmup_account(account: &StoredAccount) -> Result<()> {
     }
 }
 
+fn select_account_entry<'a>(
+    payload: &'a AccountsCheckResponse,
+    account_id: Option<&str>,
+) -> Result<&'a AccountsCheckEntry> {
+    if let Some(id) = account_id.filter(|id| !id.is_empty()) {
+        return payload.accounts.get(id).context("Accounts check response did not include the requested workspace; cached metadata preserved");
+    }
+    payload
+        .accounts
+        .get("default")
+        .or_else(|| {
+            if payload.accounts.len() == 1 {
+                payload.accounts.values().next()
+            } else {
+                None
+            }
+        })
+        .context("Accounts check response did not identify an unambiguous account entry")
+}
+
 pub async fn fetch_chatgpt_account_metadata(
     account: &StoredAccount,
 ) -> Result<ChatGptAccountMetadata> {
@@ -161,11 +181,7 @@ pub async fn fetch_chatgpt_account_metadata(
 
     let payload: AccountsCheckResponse = crate::api::http::json(response).await?;
 
-    let selected_entry = chatgpt_account_id
-        .and_then(|account_id| payload.accounts.get(account_id))
-        .or_else(|| payload.accounts.get("default"))
-        .or_else(|| payload.accounts.values().next())
-        .context("Accounts check response did not include an account entry")?;
+    let selected_entry = select_account_entry(&payload, chatgpt_account_id)?;
 
     Ok(ChatGptAccountMetadata {
         plan_type: selected_entry
@@ -569,5 +585,27 @@ mod tests {
 
         assert_eq!(primary.map(|window| window.used_percent), Some(11.0));
         assert_eq!(secondary.map(|window| window.used_percent), Some(22.0));
+    }
+}
+
+#[cfg(test)]
+mod workspace_metadata_tests {
+    use super::*;
+    #[test]
+    fn missing_workspace_never_uses_default_metadata() {
+        let payload: AccountsCheckResponse = serde_json::from_value(serde_json::json!({"accounts": {
+   "default": {"account": {"plan_type": "free"}}, "workspace": {"account": {"plan_type": "team"}}
+  }})).unwrap();
+        assert!(select_account_entry(&payload, Some("missing")).is_err());
+        assert_eq!(
+            select_account_entry(&payload, Some("workspace"))
+                .unwrap()
+                .account
+                .as_ref()
+                .unwrap()
+                .plan_type
+                .as_deref(),
+            Some("team")
+        );
     }
 }

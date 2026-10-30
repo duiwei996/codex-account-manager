@@ -1,4 +1,5 @@
 export default {
+  "Team pay-as-you-go": "团队按量付费",
   "WebDAV Sync": "WebDAV 同步",
   "WebDAV sync is available in the desktop app.": "请在桌面应用中使用 WebDAV 同步。",
   "Login expired": "登录已失效",

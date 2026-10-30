@@ -22,12 +22,13 @@ export function wrapWindowsInstaller({ target = "", sign = false, upload = false
   if (sign && !env.TAURI_SIGNING_PRIVATE_KEY) throw new Error("Missing updater signing key");
   if (target && !/^[a-z0-9_-]+$/.test(target)) throw new Error("Invalid build target");
   const version = verifyProjectVersion(root);
-  const outputDirectory = join(root, "src-tauri", "target", ...(target ? [target] : []), "release", "bundle", "nsis");
+  const targetDirectory = env.CARGO_TARGET_DIR ? resolve(root, env.CARGO_TARGET_DIR) : join(root, "src-tauri", "target");
+  const outputDirectory = join(targetDirectory, ...(target ? [target] : []), "release", "bundle", "nsis");
   const productName = JSON.parse(readFileSync(join(root, "src-tauri", "tauri.conf.json"), "utf8")).productName;
   const files = readdirSync(outputDirectory).filter(name => name === `${productName}_${version}_x64-setup.exe`);
   if (files.length !== 1) throw new Error("Expected one current-version x64 NSIS installer");
   const installer = join(outputDirectory, files[0]);
-  const compiler = join(root, "src-tauri", "target", ".tauri", "NSIS", "makensis.exe");
+  const compiler = join(targetDirectory, ".tauri", "NSIS", "makensis.exe");
   if (!existsSync(compiler)) throw new Error("Build the official Windows installer first");
   const temporary = join(root, ".tmp", "windows-install-wrapper", `${version}-${target || "host"}`);
   mkdirSync(temporary, { recursive: true });

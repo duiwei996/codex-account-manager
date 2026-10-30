@@ -1,3 +1,4 @@
+import { normalizeAccountPlan } from "./lib/accountPlan.ts";
 import { readAccountCache, readStatsCache, writeStatsCache } from "./lib/accountCache";
 import { ActionIcon } from "./components/ActionIcon";
 import { localizeError } from "./lib/errors";
@@ -39,8 +40,9 @@ function formatError(err: unknown): string {
 
 // "plus" -> "Plus". Returns null when there is no usable plan label.
 function formatPlan(plan: string | null): string | null {
-  const trimmed = plan?.trim();
+  const trimmed = plan?.trim() ? normalizeAccountPlan(plan) : null;
   if (!trimmed) return null;
+  if (trimmed === "self_serve_business_usage_based") return tr("Team pay-as-you-go", getLocale());
   return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
 }
 

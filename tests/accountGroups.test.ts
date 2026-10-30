@@ -78,3 +78,14 @@ test("risk isolation excludes active and inactive accounts from ordinary panels 
   assert.equal(getAccountPlanKey(accounts[1]), "team");
   assert.deepEqual(selectAccountPanel(accounts, "team").otherAccounts.map(a => a.id), ["risk", "normal"]);
 });
+
+
+test("usage-based plans keep their own category without modifying stored metadata", () => {
+ const expired = { id: "old", auth_mode: "chat_g_p_t", plan_type: "self_serve_business_usage_based", credentials_invalid: true } as AccountInfo;
+ const valid = { id: "new", auth_mode: "chat_g_p_t", plan_type: "team" } as AccountInfo;
+ assert.equal(getAccountPlanKey(expired), "self_serve_business_usage_based");
+ assert.deepEqual(groupAccountsByPlan([expired, valid], true).map(g => [g.key, g.accounts.map(a => a.id)]), [["team", ["new"]], ["self_serve_business_usage_based", ["old"]]]);
+ assert.deepEqual(selectAccountPanel([expired, valid], "team").otherAccounts.map(a => a.id), ["new"]);
+ assert.deepEqual(selectAccountPanel([expired, valid], "self_serve_business_usage_based").otherAccounts.map(a => a.id), ["old"]);
+ assert.equal(expired.plan_type, "self_serve_business_usage_based");
+});

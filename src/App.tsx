@@ -1111,7 +1111,7 @@ function App() {
   const visibleAccounts = accountPanel.otherAccounts.filter(account => matchesAccountSearch(account, normalizedAccountSearchQuery));
   const hasNoMatchingAccounts = !currentAccount && visibleAccounts.length === 0;
   const getPlanTabLabel = (key: string) => key === "all" ? t("All") : key === "free" ? t("Free accounts") :
-    key === "risk" ? t("Risk control") : key === "team" ? t("Team") : key === "api_key" ? t("API key accounts") : key === "unknown" ? t("Unknown plan") : key;
+    key === "self_serve_business_usage_based" ? t("Team pay-as-you-go") : key === "risk" ? t("Risk control") : key === "team" ? t("Team") : key === "api_key" ? t("API key accounts") : key === "unknown" ? t("Unknown plan") : key;
 
   const renderAccountCard = (account: AccountWithUsage) => (
     <AccountCard

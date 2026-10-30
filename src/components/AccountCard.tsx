@@ -1,3 +1,4 @@
+import { normalizeAccountPlan } from "../lib/accountPlan.ts";
 import { RESET_CACHE_CHANGED_EVENT, readResetCreditsCache, readStatsCache, writeStatsCache } from "../lib/accountCache";
 import { ActionIcon } from "./ActionIcon";
 import { getLocale, tr, useLocale } from "../lib/i18n";
@@ -188,7 +189,7 @@ export function AccountCard({
     }
   };
 
-  const planDisplay = account.plan_type?.toLowerCase() || (account.auth_mode === "api_key" ? "API Key" : t("Unknown"));
+  const planDisplay = account.auth_mode === "api_key" ? "API Key" : account.plan_type ? (normalizeAccountPlan(account.plan_type) === "self_serve_business_usage_based" ? t("Team pay-as-you-go") : normalizeAccountPlan(account.plan_type)) : t("Unknown");
 
   const planColors: Record<string, string> = {
     pro: "bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-300 dark:border-indigo-700",
@@ -199,8 +200,8 @@ export function AccountCard({
     api_key: "bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-700",
   };
 
-  const planKey = account.plan_type?.toLowerCase() || "api_key";
-  const planColorClass = planColors[planKey] || planColors.free;
+  const planKey = account.auth_mode === "api_key" ? "api_key" : normalizeAccountPlan(account.plan_type);
+  const planColorClass = planColors[planKey === "self_serve_business_usage_based" ? "team" : planKey] || planColors.free;
   const showSubscriptionStatus =
     account.auth_mode === "chat_g_p_t" && account.plan_type?.toLowerCase() !== "free";
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at);
@@ -345,6 +346,7 @@ export function AccountCard({
         <section className="min-w-0 rounded-xl bg-gray-50 p-3 dark:bg-gray-950/40">
           <h4 className="mb-3 text-xs font-medium text-gray-500 dark:text-gray-400">{locale === "zh-CN" ? "账号额度" : "Allowance"}</h4>
           <UsageBar usage={account.usage} loading={isRefreshing || account.usageLoading} />
+          {account.credentials_invalid && account.usage && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">{t("Cached usage")}</p>}
           {account.usage?.error && !account.credentials_invalid && <button onClick={() => void handleRefresh().catch(() => {})} disabled={isRefreshing || account.usageLoading} className="mt-2 text-xs font-medium text-blue-600 hover:underline disabled:opacity-50 dark:text-blue-400">{t("Retry")}</button>}
         </section>
         {account.is_active && (
