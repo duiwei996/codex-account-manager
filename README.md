@@ -69,7 +69,7 @@ JSON 文件含有完整登录凭据，请妥善保管，不要公开分享。CPA
 
 ## 本地构建
 
-安装项目依赖和对应平台的 Tauri 构建环境后，运行 `pnpm build:local` 生成支持自动更新的本地安装包。该入口使用 `src-tauri/updater-public-key.txt` 中的正式公钥，以及本仓库 GitHub Releases 的更新地址；前后端更新功能同时启用。可通过 `TAURI_UPDATER_PUBLIC_KEY` 显式提供公钥，必须与正式更新包的签名匹配。
+使用 `.node-version` 指定的 Node.js 版本、`package.json` 指定的 pnpm 和 `rust-toolchain.toml` 指定的 Rust，安装对应平台的 Tauri 构建环境及 `cargo-audit 0.22.1` 后，运行 `pnpm build:local`。入口先执行与 CI 共用的完整检查，全部通过后生成支持自动更新的本地安装包；检查失败即停止打包。该入口使用 `src-tauri/updater-public-key.txt` 中的正式公钥，以及本仓库 GitHub Releases 的更新地址；前后端更新功能同时启用。可通过 `TAURI_UPDATER_PUBLIC_KEY` 显式提供公钥，必须与正式更新包的签名匹配。
 
 本地包接收正式更新不需要私钥，也不生成签名更新产物。发布供其他安装接收的更新仍通过正式发布流程签名并上传。普通 `pnpm build` 仅构建前端；直接运行 Tauri 构建命令不会自动启用更新。
 
@@ -77,11 +77,13 @@ Windows 的 `build:local` 会在官方安装器外生成项目自有安装入口
 
 ## 版本管理
 
+`pnpm install` 会为当前仓库安装推送前检查，也可运行 `pnpm hooks:install`。每次正常 `git push` 都重新执行两端依赖安全审计、工具链、版本与 Rust 格式检查；前端高危及严重漏洞阻止推送，低危及中危保留报告；Rust 保持现有审计标准。审计服务失败或工具缺失也阻止推送。检查要求工作区干净且推送当前 HEAD，避免审计工作区却推送另一份代码。已有其他 Git hooks 配置时安装会停止，须先整合。工具链或显式指定的 `CARGO_AUDIT_BIN` 路径变化后重新安装 hooks；CI 不安装本地 hooks。不要用 `--no-verify` 跳过检查。检查通过只覆盖当时已知公告，云端继续保留独立审计。
+
 根目录 `VERSION` 是唯一版本来源。本地构建不会自动加号；云端构建读取相同版本，已存在的版本会跳过发布，低于已有版本则报错。
 
 修改 `VERSION` 后运行 `pnpm version:sync` 同步前端、Tauri 和 Cargo；也可通过 `pnpm version:bump 1.0.5` 明确更新所有版本文件。`pnpm version:check` 和构建入口会检查一致性。正式发布前确认目标版本尚未使用；已预留的草稿也视为已使用，不覆盖原有产物。
 
-推送前安装 `cargo-audit 0.22.1` 并运行 `pnpm check:ci`，核对版本、Rust 格式、前后端依赖安全审计、前端编译及测试、当前系统的 Rust 测试；任一检查失败即停止。审计读取当前漏洞库，过去通过的锁文件也须重新检查；官方预编译审计器可通过 `CARGO_AUDIT_BIN` 指定路径。仅需格式和安全审计时可运行 `pnpm release:preflight`。本地检查不替代云端其他系统的验收；`pnpm build:local` 只负责生成安装包，不代表 CI 检查已通过。更新插件关闭旧版 ZIP 解包支持；本项目使用原始 EXE/MSI、AppImage 和 macOS tar.gz 更新包。
+推送前运行 `pnpm check:ci`，核对工具链、版本、冻结锁文件安装、Rust 格式、前后端依赖安全审计、前端编译及测试、当前系统的 Rust 测试；任一检查失败即停止。CI 的 `pnpm check:frontend` 和 `pnpm check:rust` 复用同一检查脚本，`pnpm build:local` 强制执行完整检查。审计从官方源读取当前漏洞库，过去通过的锁文件也须重新检查；官方预编译审计器可通过 `CARGO_AUDIT_BIN` 指定路径。仅需格式和安全审计时可运行 `pnpm release:preflight`。本地检查不替代云端其他系统、签名和发布产物的验收。更新插件关闭旧版 ZIP 解包支持；本项目使用原始 EXE/MSI、AppImage 和 macOS tar.gz 更新包。
 
 ## 许可证
 

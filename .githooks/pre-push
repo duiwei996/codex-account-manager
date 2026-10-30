@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+runtime="$(git config --local codex.nodePath)"
+exec "$runtime" scripts/pre-push.mjs

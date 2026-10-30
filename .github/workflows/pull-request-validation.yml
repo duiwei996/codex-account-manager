@@ -24,25 +24,15 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
-          package-manager-cache: false
+          node-version-file: '.node-version'
 
       - name: Setup pnpm
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
         with:
           version: '10.18.3'
 
-      - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Dependency security audit
-        run: pnpm audit --audit-level=low
-
-      - name: Build frontend
-        run: pnpm build
-
-      - name: Run frontend tests
-        run: pnpm test
+      - name: Frontend checks shared with local builds
+        run: pnpm check:frontend
 
   rust:
     name: Rust tests and format
@@ -52,6 +42,16 @@ jobs:
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version-file: '.node-version'
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: '10.18.3'
 
       - name: Install system dependencies
         run: |
@@ -69,16 +69,11 @@ jobs:
           workspaces: src-tauri -> target
           cache-on-failure: false
 
-      - name: Check Rust formatting
-        run: cargo fmt --manifest-path src-tauri/Cargo.toml --all -- --check
+      - name: Install the pinned dependency auditor
+        run: cargo install cargo-audit --locked --version 0.22.1
 
-      - name: Rust dependency audit
-        run: |
-          cargo install cargo-audit --locked --version 0.22.1
-          cargo audit --file src-tauri/Cargo.lock
-
-      - name: Run Rust tests
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+      - name: Rust checks shared with local builds
+        run: pnpm check:rust
 
   platform-check:
     name: Platform compile (${{ matrix.os }})

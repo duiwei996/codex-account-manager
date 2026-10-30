@@ -11,7 +11,7 @@ globalThis.document = dom.window.document;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 const { createRoot } = await import("react-dom/client");
 const server = await createServer({ configFile: false, plugins: [react()],
-  server: { middlewareMode: true, hmr: false }, optimizeDeps: { noDiscovery: true, include: [] }, appType: "custom" });
+  server: { middlewareMode: true, hmr: false, watch: null }, optimizeDeps: { noDiscovery: true, include: [] }, appType: "custom" });
 const { AccountCard } = await server.ssrLoadModule("/src/components/AccountCard.tsx");
 after(async () => { await server.close(); dom.window.close(); });
 

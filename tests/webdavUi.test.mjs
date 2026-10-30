@@ -30,7 +30,7 @@ window.__TAURI_INTERNALS__ = {
     throw new Error(`Unexpected command ${command}`);
   },
 };
-const server = await createServer({ configFile: false, plugins: [react()], server: { middlewareMode: true, hmr: false }, optimizeDeps: { noDiscovery: true, include: [] }, appType: "custom" });
+const server = await createServer({ configFile: false, plugins: [react()], server: { middlewareMode: true, hmr: false, watch: null }, optimizeDeps: { noDiscovery: true, include: [] }, appType: "custom" });
 const { WebDavSettings } = await server.ssrLoadModule("/src/components/WebDavSettings.tsx");
 const { WebDavSyncDialog } = await server.ssrLoadModule("/src/components/WebDavSyncDialog.tsx");
 const { WebDavSyncButton } = await server.ssrLoadModule("/src/components/WebDavSyncButton.tsx");

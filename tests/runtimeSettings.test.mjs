@@ -52,7 +52,7 @@ window.__TAURI_INTERNALS__ = {
     }
   },
 };
-const server = await createServer({ configFile: false, plugins: [react()], server: { middlewareMode: true, hmr: false }, optimizeDeps: { noDiscovery: true, include: [] }, appType: "custom" });
+const server = await createServer({ configFile: false, plugins: [react()], server: { middlewareMode: true, hmr: false, watch: null }, optimizeDeps: { noDiscovery: true, include: [] }, appType: "custom" });
 const { createRoot } = await import("react-dom/client");
 const { AccountUsageStats } = await server.ssrLoadModule("/src/components/AccountUsageStats.tsx");
 const { getDueAutoWarmupWindow } = await server.ssrLoadModule("/src/lib/autoWarmupPolicy.ts");

@@ -55,7 +55,7 @@ On startup, previously fetched account information, quota and statistics appear 
 
 ## Local builds
 
-After installing the dependencies and platform-specific Tauri build prerequisites, run `pnpm build:local` to create a local installer with automatic updates enabled. It uses the official public key in `src-tauri/updater-public-key.txt` and this repository's GitHub Releases update endpoint, enabling both frontend and backend update support. `TAURI_UPDATER_PUBLIC_KEY` can explicitly supply a public key matching the signatures of official updates.
+Use the Node.js version in `.node-version`, pnpm from `package.json`, and Rust from `rust-toolchain.toml`. After installing the platform-specific Tauri build prerequisites and `cargo-audit 0.22.1`, run `pnpm build:local`. It runs the full checks shared with CI before creating an installer, and any failed check stops packaging. It uses the official public key in `src-tauri/updater-public-key.txt` and this repository's GitHub Releases update endpoint, enabling both frontend and backend update support. `TAURI_UPDATER_PUBLIC_KEY` can explicitly supply a public key matching the signatures of official updates.
 
 Receiving official updates requires no private key and does not generate signed update artifacts. Updates distributed to other installations still use the signed release workflow. `pnpm build` builds only the frontend; direct Tauri build commands do not automatically enable updates.
 
@@ -63,11 +63,13 @@ On Windows, `build:local` adds a project-owned launcher around the stock install
 
 ## Version management
 
+`pnpm install` installs repository-local pre-push checks; `pnpm hooks:install` reinstalls them. Each normal `git push` performs fresh frontend and Rust security audits, toolchain, version and Rust format checks. High and critical frontend findings block pushes; low and moderate findings remain visible warnings. Rust retains its existing audit policy. Unavailable audit services and missing tools also block pushes. A clean tree matching the pushed HEAD is required. Existing hook configurations require integration first. Reinstall after moving the toolchain or an explicit `CARGO_AUDIT_BIN`; CI skips hook installation. Do not bypass checks with `--no-verify`. Cloud audits remain enabled for newly published advisories.
+
 Root `VERSION` is the single version source. Local builds never increment it; cloud builds use the same version. Reserved versions are skipped, and versions older than existing releases are rejected.
 
 After editing `VERSION`, run `pnpm version:sync` to synchronize frontend, Tauri and Cargo metadata, or use `pnpm version:bump 1.0.5` to update all version files explicitly. `pnpm version:check` and build entry points verify consistency. Choose an unused version before releasing; existing drafts are also reserved and their artifacts are not overwritten.
 
-Before pushing, install `cargo-audit 0.22.1` and run `pnpm check:ci` to check versions, Rust formatting, both dependency security audits, the frontend build and tests, and Rust tests on the current host. Any failure stops the checks. Audits use current advisories, so previously passing lockfiles must be checked again. Set `CARGO_AUDIT_BIN` to use an official prebuilt auditor. Use `pnpm release:preflight` for formatting and security checks only. Local checks do not replace CI on other operating systems; `pnpm build:local` creates an installer without certifying that CI passes. Legacy ZIP extraction is disabled in the updater; releases use raw EXE/MSI, AppImage and macOS tar.gz packages.
+Before pushing, run `pnpm check:ci` to check toolchains, versions, frozen dependency installation, Rust formatting, both dependency security audits, the frontend build and tests, and Rust tests on the current host. Any failure stops the checks. CI uses `pnpm check:frontend` and `pnpm check:rust` from the same script; `pnpm build:local` requires the combined checks to pass. Audits use current advisories from official sources, so previously passing lockfiles must be checked again. Set `CARGO_AUDIT_BIN` to use an official prebuilt auditor. Use `pnpm release:preflight` for formatting and security checks only. Local checks do not replace CI on other operating systems or signed release verification. Legacy ZIP extraction is disabled in the updater; releases use raw EXE/MSI, AppImage and macOS tar.gz packages.
 
 ## License
 

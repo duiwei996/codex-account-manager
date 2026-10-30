@@ -4,9 +4,15 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createUpdaterConfig } from "./updater-config.mjs";
 import { wrapWindowsInstaller } from "./wrap-windows-installer.mjs";
+import { runPreflight } from "./release-preflight.mjs";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const keyFile = join(root, "src-tauri", "updater-public-key.txt");
+
+export function checkedLocalBuild({ check, build }) {
+  check();
+  return build();
+}
 
 export function shouldWrapWindowsInstaller(args) {
   if (args.includes("--no-bundle")) return false;
@@ -41,10 +47,13 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const savedPublicKey = existsSync(keyFile) ? readFileSync(keyFile, "utf8") : "";
     const prepared = prepareLocalBuild(process.env, template, savedPublicKey, process.argv.slice(2));
     console.log("Building a local installer with the official update channel enabled (public key only).");
-    const result = spawnSync(process.execPath, [join(root, "node_modules", "@tauri-apps", "cli", "tauri.js"), ...prepared.args], {
-      cwd: root,
-      env: prepared.env,
-      stdio: "inherit",
+    const result = checkedLocalBuild({
+      check: () => runPreflight({ full: true, env: prepared.env }),
+      build: () => spawnSync(process.execPath, [join(root, "node_modules", "@tauri-apps", "cli", "tauri.js"), ...prepared.args], {
+        cwd: root,
+        env: prepared.env,
+        stdio: "inherit",
+      }),
     });
     if (result.error) throw result.error;
     process.exitCode = result.status ?? 1;

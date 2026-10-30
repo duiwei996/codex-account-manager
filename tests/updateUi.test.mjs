@@ -8,7 +8,7 @@ import react from "@vitejs/plugin-react";
 const server = await createServer({
   configFile: false,
   plugins: [react()],
-  server: { middlewareMode: true, hmr: false },
+  server: { middlewareMode: true, hmr: false, watch: null },
   optimizeDeps: { noDiscovery: true, include: [] },
   appType: "custom",
 });
