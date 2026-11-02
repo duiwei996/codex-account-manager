@@ -7,7 +7,11 @@ use std::time::{Duration, Instant};
 mod desktop_reopen;
 pub use desktop_reopen::*;
 
-#[cfg(any(windows, test))]
+#[cfg(windows)]
+#[path = "windows_process.rs"]
+mod windows_process;
+
+#[cfg(test)]
 use anyhow::Context;
 
 #[cfg(unix)]
@@ -73,7 +77,11 @@ const CODEX_RUNNING_SWITCH_BLOCKED_PREFIX: &str = "Cannot switch accounts while 
 /// Check for running Codex processes
 #[tauri::command]
 pub async fn check_codex_processes() -> Result<CodexProcessInfo, String> {
-    let (pids, bg_count) = find_codex_processes().map_err(|e| e.to_string())?;
+    // WMI is blocking; do not hold up the async runtime while the provider responds.
+    let (pids, bg_count) = tauri::async_runtime::spawn_blocking(find_codex_processes)
+        .await
+        .map_err(|e| e.to_string())?
+        .map_err(|e| e.to_string())?;
     let count = pids.len();
 
     Ok(CodexProcessInfo {
@@ -643,52 +651,7 @@ fn find_windows_codex_processes() -> anyhow::Result<(Vec<u32>, usize)> {
 
 #[cfg(windows)]
 fn read_windows_codex_processes() -> anyhow::Result<Vec<WindowsCodexProcess>> {
-    // tasklist counts every Electron helper (`--type=gpu-process`, crashpad, renderer, etc.),
-    // which inflates the badge and incorrectly blocks switching. Use PowerShell so we can inspect
-    // the command line and only count live top-level app instances.
-    const POWERSHELL_SCRIPT: &str = r#"
-$windowTitles = @{}
-Get-Process -Name Codex,ChatGPT -ErrorAction SilentlyContinue | ForEach-Object {
-  $windowTitles[[uint32]$_.Id] = $_.MainWindowTitle
-}
-
-Get-CimInstance Win32_Process |
-  Where-Object { $_.Name -ieq 'Codex.exe' -or $_.Name -ieq 'ChatGPT.exe' } |
-  ForEach-Object {
-    [PSCustomObject]@{
-      Name = $_.Name
-      ProcessId = [uint32]$_.ProcessId
-      ParentProcessId = [uint32]$_.ParentProcessId
-      CommandLine = if ($_.CommandLine) { $_.CommandLine } else { '' }
-      ExecutablePath = if ($_.ExecutablePath) { $_.ExecutablePath } else { '' }
-      MainWindowTitle = if ($windowTitles.ContainsKey([uint32]$_.ProcessId)) {
-        [string]$windowTitles[[uint32]$_.ProcessId]
-      } else {
-        ''
-      }
-    }
-  } |
-  ConvertTo-Json -Compress
-"#;
-
-    let output = Command::new("powershell.exe")
-        .creation_flags(CREATE_NO_WINDOW)
-        .args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            POWERSHELL_SCRIPT,
-        ])
-        .output()
-        .context("failed to query Windows process list")?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("PowerShell process query failed: {}", stderr.trim());
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    parse_windows_codex_processes(&stdout)
+    windows_process::read_codex_processes()
 }
 
 #[cfg(any(windows, test))]
@@ -734,7 +697,7 @@ fn classify_windows_codex_processes(processes: &[WindowsCodexProcess]) -> (Vec<u
     (active_pids, ignored_count)
 }
 
-#[cfg(any(windows, test))]
+#[cfg(test)]
 fn parse_windows_codex_processes(stdout: &str) -> anyhow::Result<Vec<WindowsCodexProcess>> {
     let trimmed = stdout.trim();
     if trimmed.is_empty() {
