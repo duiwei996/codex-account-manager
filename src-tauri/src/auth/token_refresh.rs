@@ -64,7 +64,7 @@ pub(crate) async fn ensure_chatgpt_tokens_fresh_locked(
             ..
         } => {
             if chatgpt_tokens_need_refresh_at(id_token, access_token, Utc::now().timestamp()) {
-                refresh_chatgpt_tokens_locked(&current).await
+                refresh_chatgpt_tokens_locked(&current, false).await
             } else {
                 Ok(current)
             }
@@ -80,10 +80,20 @@ pub async fn refresh_chatgpt_tokens(account: &StoredAccount) -> Result<StoredAcc
 
     let _auth_guard = AUTH_OPERATION_LOCK.lock().await;
     let _file_guard = super::lock_auth_files().await?;
-    refresh_chatgpt_tokens_locked(account).await
+    refresh_chatgpt_tokens_locked(account, false).await
 }
 
-async fn refresh_chatgpt_tokens_locked(account: &StoredAccount) -> Result<StoredAccount> {
+/// Explicit user retry may probe credentials previously marked invalid.
+pub async fn retry_chatgpt_tokens(account: &StoredAccount) -> Result<StoredAccount> {
+    let _auth_guard = AUTH_OPERATION_LOCK.lock().await;
+    let _file_guard = super::lock_auth_files().await?;
+    refresh_chatgpt_tokens_locked(account, true).await
+}
+
+async fn refresh_chatgpt_tokens_locked(
+    account: &StoredAccount,
+    retry_invalid: bool,
+) -> Result<StoredAccount> {
     let (current, is_active) = load_account_reconciling_live_auth(&account.id)?;
 
     if is_active && crate::commands::process::ensure_codex_not_running().is_err() {
@@ -104,7 +114,7 @@ async fn refresh_chatgpt_tokens_locked(account: &StoredAccount) -> Result<Stored
         anyhow::bail!("Missing refresh token for account {}", current.name);
     }
 
-    if current.credentials_invalid {
+    if current.credentials_invalid && !retry_invalid {
         anyhow::bail!("Account credentials invalid; sign in again");
     }
     let refreshed = match refresh_tokens_with_refresh_token(&current_refresh_token).await {

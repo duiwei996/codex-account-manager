@@ -1,9 +1,10 @@
 use std::path::{Component, Path, PathBuf};
 
 use crate::commands::{
-    add_account_from_auth_json_text, delete_account, fetch_usage, get_account_usage_stats,
-    get_active_account_info, get_masked_account_ids, list_accounts, refresh_account_metadata,
-    refresh_all_accounts_usage, rename_account, set_masked_account_ids, switch_account,
+    add_account_from_auth_json_text, delete_account, fetch_usage_with_retry,
+    get_account_usage_stats, get_active_account_info, get_masked_account_ids, list_accounts,
+    refresh_account_metadata, refresh_all_accounts_usage, rename_account, set_masked_account_ids,
+    switch_account,
 };
 use anyhow::Context;
 use serde::de::DeserializeOwned;
@@ -16,6 +17,15 @@ use tokio::runtime::Runtime;
 struct AccountIdArgs {
     #[serde(alias = "account_id")]
     account_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct UsageArgs {
+    #[serde(alias = "account_id")]
+    account_id: String,
+    #[serde(default, alias = "retry_invalid")]
+    retry_invalid: bool,
 }
 
 #[derive(Deserialize)]
@@ -272,8 +282,8 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
             to_json(add_account_from_auth_json_text(args.name, args.contents).await?)
         }
         "get_usage" => {
-            let args: AccountIdArgs = parse_args(payload)?;
-            to_json(fetch_usage(&args.account_id).await?)
+            let args: UsageArgs = parse_args(payload)?;
+            to_json(fetch_usage_with_retry(&args.account_id, args.retry_invalid).await?)
         }
         "get_account_usage_stats" => {
             let args: AccountIdArgs = parse_args(payload)?;
@@ -404,6 +414,18 @@ mod web_security_tests {
         assert!(!web_command_allowed("delete_account", false));
         assert!(web_command_allowed("rename_account", true));
         assert!(web_command_allowed("get_usage", false));
+    }
+
+    #[test]
+    fn usage_retry_requires_an_explicit_flag() {
+        let automatic: UsageArgs = parse_args(json!({"accountId": "synthetic"})).unwrap();
+        assert!(!automatic.retry_invalid);
+        let manual: UsageArgs =
+            parse_args(json!({"accountId": "synthetic", "retryInvalid": true})).unwrap();
+        assert!(manual.retry_invalid);
+        let snake_case: UsageArgs =
+            parse_args(json!({"account_id": "synthetic", "retry_invalid": true})).unwrap();
+        assert!(snake_case.retry_invalid);
     }
 
     #[tokio::test]

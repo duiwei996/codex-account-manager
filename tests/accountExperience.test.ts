@@ -4,8 +4,20 @@ import { readFileSync, readdirSync } from "node:fs";
 import zh from "../src/lib/locales/zh-CN.ts";
 import en from "../src/lib/locales/en-US.ts";
 import { localizeError } from "../src/lib/errors.ts";
-import { mergeUsageResult } from "../src/lib/usageDisplay.ts";
-import type { UsageInfo } from "../src/types";
+import { mergeUsageResult, withUsagePlan } from "../src/lib/usageDisplay.ts";
+import type { AccountInfo, UsageInfo } from "../src/types";
+
+test("quota plan corrects stale team labels without guessing on failures or missing data", () => {
+  const account = { id: "a", auth_mode: "chat_g_p_t", plan_type: "team", subscription_expires_at: "2027-01-01T00:00:00Z" } as AccountInfo;
+  const usage = { account_id: "a", plan_type: "free", error: null } as UsageInfo;
+  assert.equal(withUsagePlan(account, usage).plan_type, "free");
+  assert.equal(withUsagePlan(account, usage).subscription_expires_at, null);
+  assert.equal(withUsagePlan(account, { ...usage, plan_type: "self_serve_business_usage_based" }).plan_type, "self_serve_business_usage_based");
+  for (const untrusted of [undefined, { ...usage, account_id: "other" }, { ...usage, error: "network unavailable" }, { ...usage, plan_type: null }, { ...usage, plan_type: " " }]) {
+    assert.equal(withUsagePlan(account, untrusted), account);
+  }
+  assert.equal(withUsagePlan({ ...account, auth_mode: "api_key" }, usage).plan_type, "team");
+});
 
 test("language catalogs cover every static UI translation and share keys", () => {
   assert.deepEqual(Object.keys(zh).sort(), Object.keys(en).sort());

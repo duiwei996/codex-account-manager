@@ -934,3 +934,17 @@ pub(crate) fn mark_credentials_invalid(account: &StoredAccount, message: &str) -
         Ok(())
     })
 }
+
+/// A successful manual probe must not clear a newer login's invalid flag.
+pub(crate) fn mark_credentials_valid(account: &StoredAccount) -> Result<()> {
+    update_accounts(|store| {
+        if let Some(current) = store.accounts.iter_mut().find(|a| a.id == account.id) {
+            if serde_json::to_value(&current.auth_data)?
+                == serde_json::to_value(&account.auth_data)?
+            {
+                current.credentials_invalid = false;
+            }
+        }
+        Ok(())
+    })
+}

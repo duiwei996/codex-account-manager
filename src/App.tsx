@@ -1132,7 +1132,7 @@ function App() {
                       }}
                       onExport={() => openTransfer("export", account.id)}
                       onRefresh={() =>
-                        refreshSingleUsage(account.id, { refreshMetadata: true })
+                        refreshSingleUsage(account.id, { refreshMetadata: true, manual: true })
                       }
                       onRename={(newName) => renameAccount(account.id, newName)}
                       switching={switchingId === account.id}

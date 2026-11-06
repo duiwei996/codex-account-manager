@@ -22,6 +22,7 @@ const account = (id, active = false) => ({ id, name: id, email: null, plan_type:
 let accounts = [account("first", true), account("second")];
 let failUsage = false;
 let customUsage = null;
+let customMetadata = null;
 let exportDocuments = [];
 window.__TAURI_INTERNALS__ = {
   metadata: { currentWindow: { label: "main" } },
@@ -38,7 +39,7 @@ window.__TAURI_INTERNALS__ = {
       case "get_usage": if (failUsage) throw new Error("401 Unauthorized"); if (customUsage) return customUsage(args.accountId); return { account_id: args.accountId, primary_used_percent: 25, secondary_used_percent: 50, error: null };
       case "warmup_account": await new Promise(resolve => setTimeout(resolve, 20)); return null;
       case "get_account_usage_stats": throw new Error("401 Unauthorized");
-      case "refresh_account_metadata": return accounts.find(a => a.id === args.accountId);
+      case "refresh_account_metadata": return customMetadata ? customMetadata(args.accountId) : accounts.find(a => a.id === args.accountId);
       case "switch_account": accounts = accounts.map(a => ({ ...a, is_active: a.id === args.accountId })); return null;
       case "rename_account": accounts = accounts.map(a => a.id === args.accountId ? { ...a, name: args.newName } : a); return null;
       case "complete_login": { const added = account("added"); accounts.push(added); return added; }
@@ -404,6 +405,82 @@ test("main page refresh and both warmups include the active account and exclude 
     await prepare('timed');
     assert.deepEqual(ids('warmup_account'), ['active-plus', 'team']);
     assert.ok(!calls.some(c => c.command === 'get_usage' && ['other-free', 'invalid-team', 'risk-team'].includes(c.args.accountId)));
+  } finally {
+    await act(async () => root.render(null));
+    customUsage = null;
+    localStorage.clear();
+  }
+});
+
+test("free quota moves former team accounts out of team through refresh races, reload and remount", async () => {
+  await act(async () => root.render(null));
+  localStorage.clear();
+  accounts = ["former-team-a", "former-team-b"].map(id => ({ ...account(id), auth_mode: "chat_g_p_t", plan_type: "team", subscription_expires_at: "2027-01-01T00:00:00Z" }));
+  failUsage = false;
+  let controller;
+  function Harness() { controller = useAccounts({ ...defaults, refresh_scope: "off" }, true); return null; }
+  const freeUsage = id => ({ account_id: id, plan_type: "free", primary_used_percent: null, secondary_used_percent: 20, error: null });
+  customUsage = freeUsage;
+  try {
+    await act(async () => root.render(createElement(Harness)));
+    await settle();
+    // Metadata finishes after quota and still carries the old team plan.
+    customMetadata = async id => { await new Promise(resolve => setTimeout(resolve, 30)); return accounts.find(a => a.id === id); };
+    await act(async () => controller.refreshSingleUsage("former-team-a", { refreshMetadata: true }));
+    assert.equal(controller.accounts[0].plan_type, "free");
+    assert.equal(controller.accounts[0].subscription_expires_at, null);
+    // Quota finishes last during a batch refresh.
+    customMetadata = null;
+    customUsage = async id => { await new Promise(resolve => setTimeout(resolve, 30)); return freeUsage(id); };
+    await act(async () => controller.refreshUsage(undefined, { refreshMetadata: true }));
+    assert.deepEqual(controller.accounts.map(a => a.plan_type), ["free", "free"]);
+    const { selectAccountPanel } = await server.ssrLoadModule("/src/lib/accountGroups.ts");
+    assert.equal(selectAccountPanel(controller.accounts, "team").otherAccounts.length, 0);
+    assert.equal(selectAccountPanel(controller.accounts, "free").otherAccounts.length, 2);
+    await act(async () => controller.loadAccounts(true));
+    assert.deepEqual(controller.accounts.map(a => a.plan_type), ["free", "free"]);
+    await act(async () => root.render(null));
+    await act(async () => root.render(createElement(Harness)));
+    await settle();
+    assert.deepEqual(controller.accounts.map(a => a.plan_type), ["free", "free"]);
+    assert.deepEqual(readAccountCache().map(a => a.plan_type), ["free", "free"]);
+  } finally {
+    customUsage = null;
+    customMetadata = null;
+    await act(async () => root.render(null));
+    localStorage.clear();
+  }
+});
+
+test("invalid login skips automatic and batch refresh but allows an explicit single retry", async () => {
+  await act(async () => root.render(null));
+  localStorage.clear();
+  accounts = [{ ...account("invalid", true), auth_mode: "chat_g_p_t", plan_type: "team", credentials_invalid: true }];
+  let controller;
+  function Harness() { controller = useAccounts(defaults, true); return null; }
+  let succeeds = false;
+  customUsage = id => {
+    assert.equal(calls.filter(c => c.command === "get_usage").at(-1).args.retryInvalid, true);
+    if (!succeeds) return { account_id: id, error: "API error: 401 Unauthorized" };
+    accounts = accounts.map(a => ({ ...a, credentials_invalid: false }));
+    return { account_id: id, plan_type: "free", secondary_used_percent: 15, error: null };
+  };
+  try {
+    calls.length = 0;
+    await act(async () => root.render(createElement(Harness)));
+    await settle();
+    await act(async () => controller.refreshUsage(undefined, { refreshMetadata: true }));
+    assert.equal(calls.filter(c => c.command === "get_usage").length, 0);
+    await act(async () => controller.refreshSingleUsage("invalid", { manual: true, refreshMetadata: true }));
+    assert.equal(controller.accounts[0].credentials_invalid, true);
+    assert.match(controller.accounts[0].usage.error, /401/);
+    assert.equal(calls.filter(c => c.command === "refresh_account_metadata").length, 0);
+    succeeds = true;
+    await act(async () => controller.refreshSingleUsage("invalid", { manual: true, refreshMetadata: true }));
+    assert.equal(controller.accounts[0].credentials_invalid, false);
+    assert.equal(controller.accounts[0].plan_type, "free");
+    assert.equal(controller.accounts[0].usage.error, null);
+    assert.ok(calls.some(c => c.command === "refresh_account_metadata"));
   } finally {
     await act(async () => root.render(null));
     customUsage = null;

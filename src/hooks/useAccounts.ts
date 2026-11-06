@@ -7,7 +7,7 @@ import type {
 } from "../types";
 import { invokeBackend, isTauriRuntime, type FileSource } from "../lib/platform";
 import { ACCOUNT_QUOTA_CHANGED_EVENT, mergeAccountQuota, readAccountCache, writeAccountCache } from "../lib/accountCache";
-import { mergeUsageResult } from "../lib/usageDisplay";
+import { mergeUsageResult, withUsagePlan } from "../lib/usageDisplay";
 import { refreshDelay, selectRefreshAccounts } from "../lib/refreshPolicy";
 import type { RuntimePreferences } from "./useRuntimePreferences";
 
@@ -21,10 +21,10 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
   const maxConcurrentUsageRequests = 4;
   const loadGenerationRef = useRef(0);
   const usageInFlightRef = useRef(new Map<string, Promise<UsageInfo>>());
-  const requestUsage = useCallback((accountId: string): Promise<UsageInfo> => {
+  const requestUsage = useCallback((accountId: string, retryInvalid = false): Promise<UsageInfo> => {
     const pending = usageInFlightRef.current.get(accountId);
     if (pending) return pending;
-    const request = invokeBackend<UsageInfo>("get_usage", { accountId }).finally(() => {
+    const request = invokeBackend<UsageInfo>("get_usage", { accountId, ...(retryInvalid ? { retryInvalid: true } : {}) }).finally(() => {
       if (usageInFlightRef.current.get(accountId) === request) usageInFlightRef.current.delete(accountId);
     });
     usageInFlightRef.current.set(accountId, request);
@@ -142,12 +142,12 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
             setAccounts((prev) =>
               prev.map((item) =>
                 item.id === account.id
-                  ? {
+                  ? withUsagePlan({
                       ...item,
                       plan_type: metadata.plan_type ?? item.plan_type,
-                      subscription_expires_at: metadata.subscription_expires_at ?? item.subscription_expires_at,
+                      subscription_expires_at: metadata.subscription_expires_at,
                       metadata_recorded_at: new Date().toISOString(),
-                    }
+                    }, item.usage)
                   : item
               )
             );
@@ -214,11 +214,11 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
           prev.map((account) => {
             const usage = usageResults.get(account.id);
             if (!usage) return account;
-            return {
+            return withUsagePlan({
               ...account,
               usage: mergeUsageResult(account.usage, usage),
               usageLoading: false,
-            };
+            }, usage);
           })
         );
 
@@ -244,12 +244,12 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
 
   const refreshSingleUsage = useCallback(async (
     accountId: string,
-    options?: { refreshMetadata?: boolean }
+    options?: { refreshMetadata?: boolean; manual?: boolean }
   ) => {
     try {
       const account = accountsRef.current.find((item) => item.id === accountId);
-      if (account?.credentials_invalid) throw new Error("Account credentials invalid; sign in again");
-      const metadataPromise = options?.refreshMetadata && account
+      if (account?.credentials_invalid && !options?.manual) throw new Error("Account credentials invalid; sign in again");
+      const metadataPromise = options?.refreshMetadata && account && !account.credentials_invalid
         ? refreshMetadata([account])
         : Promise.resolve();
 
@@ -258,15 +258,18 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
           a.id === accountId ? { ...a, usageLoading: true } : a
         )
       );
-      const usage = await requestUsage(accountId);
+      const usage = await requestUsage(accountId, options?.manual === true);
       setAccounts((prev) =>
         prev.map((a) =>
-          a.id === accountId ? { ...a, usage: mergeUsageResult(a.usage, usage), usageLoading: false } : a
+          a.id === accountId ? withUsagePlan({ ...a, usage: mergeUsageResult(a.usage, usage), usageLoading: false }, usage) : a
         )
       );
       reportUsageToTray([usage]);
       await metadataPromise;
-      if (usage.error) await loadAccounts(true);
+      if (usage.error || account?.credentials_invalid) {
+        const updated = await loadAccounts(true);
+        if (!usage.error && options?.refreshMetadata) await refreshMetadata(updated.filter(a => a.id === accountId));
+      }
       return usage;
     } catch (err) {
       console.error("Failed to refresh single usage:", err);

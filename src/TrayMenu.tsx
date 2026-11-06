@@ -3,7 +3,7 @@ import { readAccountCache, readStatsCache, writeStatsCache } from "./lib/account
 import { ActionIcon } from "./components/ActionIcon";
 import { localizeError } from "./lib/errors";
 import { selectRefreshAccounts } from "./lib/refreshPolicy";
-import { mergeUsageResult } from "./lib/usageDisplay";
+import { mergeUsageResult, withUsagePlan } from "./lib/usageDisplay";
 import type { RuntimePreferences } from "./hooks/useRuntimePreferences";
 import { getLocale, tr, useLocale } from "./lib/i18n";
 import { useCallback, useEffect, useState } from "react";
@@ -440,7 +440,8 @@ function TrayMenu() {
             {t("No accounts configured")}
           </div>
         ) : (
-          accounts.map((account) => {
+          accounts.map((storedAccount) => {
+            const account = withUsagePlan(storedAccount, usageById[storedAccount.id]);
             const planLabel = formatPlan(account.plan_type);
             const plan = planLabel ? planLabel.toLowerCase() : null;
             const usage = usageById[account.id];

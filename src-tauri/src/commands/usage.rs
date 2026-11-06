@@ -49,17 +49,43 @@ pub(crate) fn apply_cached_account_metadata(account: &mut AccountInfo) {
 
 /// Fetch usage info for a specific account (shared by the Tauri command and web mode).
 pub async fn fetch_usage(account_id: &str) -> Result<UsageInfo, String> {
+    fetch_usage_with_retry(account_id, false).await
+}
+
+pub async fn fetch_usage_with_retry(
+    account_id: &str,
+    retry_invalid: bool,
+) -> Result<UsageInfo, String> {
     let account = get_account(account_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
 
+    if retry_invalid && account.credentials_invalid {
+        let mut probe = match &account.auth_data {
+            AuthData::ChatGPT { .. } => crate::auth::retry_chatgpt_tokens(&account)
+                .await
+                .map_err(|e| e.to_string())?,
+            AuthData::ApiKey { .. } => account,
+        };
+        // Clear only the request snapshot; persist recovery after a successful query.
+        probe.credentials_invalid = false;
+        let usage = get_account_usage(&probe).await.map_err(|e| e.to_string())?;
+        if usage.error.is_none() {
+            crate::auth::storage::mark_credentials_valid(&probe).map_err(|e| e.to_string())?;
+        }
+        return Ok(usage);
+    }
     get_account_usage(&account).await.map_err(|e| e.to_string())
 }
 
 /// Get usage info for a specific account
 #[tauri::command]
-pub async fn get_usage(app: tauri::AppHandle, account_id: String) -> Result<UsageInfo, String> {
-    let usage = fetch_usage(&account_id).await?;
+pub async fn get_usage(
+    app: tauri::AppHandle,
+    account_id: String,
+    retry_invalid: Option<bool>,
+) -> Result<UsageInfo, String> {
+    let usage = fetch_usage_with_retry(&account_id, retry_invalid.unwrap_or(false)).await?;
 
     // Keep the tray menu/title in sync with whichever UI fetched fresh usage.
     #[cfg(desktop)]

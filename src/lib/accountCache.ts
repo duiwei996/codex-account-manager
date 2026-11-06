@@ -1,4 +1,5 @@
 import type { AccountWithUsage, AccountUsageStats, UsageInfo, AccountResetCredits } from "../types";
+import { withUsagePlan } from "./usageDisplay.ts";
 
 export const ACCOUNT_CACHE_KEY = "codex-switcher-account-display-cache-v1";
 export const STATS_CACHE_KEY = "codex-switcher-account-stats-cache-v1";
@@ -31,7 +32,7 @@ export function cleanUsage(value: unknown, accountId: string): UsageInfo | undef
 }
 function cleanAccount(value: unknown): AccountWithUsage | undefined {
   if (!object(value) || typeof value.id !== "string" || typeof value.name !== "string" || !["api_key", "chat_g_p_t"].includes(String(value.auth_mode))) return undefined;
-  return {
+  return withUsagePlan({
     id: value.id, name: value.name, email: string(value.email), plan_type: string(value.plan_type),
     subscription_expires_at: date(value.subscription_expires_at) ?? null,
     auth_mode: value.auth_mode as AccountWithUsage["auth_mode"], is_active: value.is_active === true,
@@ -39,7 +40,7 @@ function cleanAccount(value: unknown): AccountWithUsage | undefined {
     risk_controlled: value.risk_controlled === true,
     created_at: date(value.created_at) ?? new Date(0).toISOString(), last_used_at: date(value.last_used_at) ?? null,
     metadata_recorded_at: date(value.metadata_recorded_at), usage: cleanUsage(value.usage, value.id), usageLoading: false,
-  };
+  }, cleanUsage(value.usage, value.id));
 }
 export function readAccountCache(): AccountWithUsage[] {
   const value = read(ACCOUNT_CACHE_KEY);
@@ -52,12 +53,13 @@ export function writeAccountCache(accounts: AccountWithUsage[], replace = false)
   write(ACCOUNT_CACHE_KEY, accounts.map(cleanAccount).filter((a): a is AccountWithUsage => !!a).map(a => replace ? a : mergeAccountQuota(a,previous.get(a.id))));
 }
 export function mergeAccountQuota(account: AccountWithUsage, cached?: AccountWithUsage): AccountWithUsage {
-  if (!cached) return account;
+  if (!cached) return withUsagePlan(account, account.usage);
   const metadataNewer = cacheTime(cached.metadata_recorded_at) > cacheTime(account.metadata_recorded_at);
-  return { ...account,
+  const merged = { ...account,
     ...(metadataNewer ? { subscription_expires_at:cached.subscription_expires_at,metadata_recorded_at:cached.metadata_recorded_at } : {}),
     usage:cacheTime(cached.usage?.recorded_at) > cacheTime(account.usage?.recorded_at) ? cached.usage : account.usage,
   };
+  return withUsagePlan(merged, merged.usage);
 }
 export interface CachedResetCredits { recorded_at: string; data: AccountResetCredits }
 function cleanResetCache(value: unknown): CachedResetCredits | null {
