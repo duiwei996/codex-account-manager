@@ -8,6 +8,7 @@ import type {
 import { invokeBackend, isTauriRuntime, type FileSource } from "../lib/platform";
 import { ACCOUNT_QUOTA_CHANGED_EVENT, mergeAccountQuota, readAccountCache, writeAccountCache } from "../lib/accountCache";
 import { mergeUsageResult, withUsagePlan } from "../lib/usageDisplay";
+import { isUsageRefreshPaused, USAGE_BASED_ERROR, USAGE_BASED_PLAN } from "../lib/accountPlan";
 import { refreshDelay, selectRefreshAccounts } from "../lib/refreshPolicy";
 import type { RuntimePreferences } from "./useRuntimePreferences";
 
@@ -121,7 +122,7 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
     async (
       accountList?: AccountInfo[] | AccountWithUsage[]
     ) => {
-      const list = (accountList ?? accountsRef.current).filter(account => !account.risk_controlled && !account.credentials_invalid);
+      const list = (accountList ?? accountsRef.current).filter(account => !account.risk_controlled && !account.credentials_invalid && !isUsageRefreshPaused(account.plan_type));
       const dueAccounts = list.filter(
         (account) => !metadataRefreshInFlightRef.current.has(account.id)
       );
@@ -141,7 +142,7 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
             });
             setAccounts((prev) =>
               prev.map((item) =>
-                item.id === account.id
+                item.id === account.id && !isUsageRefreshPaused(item.plan_type)
                   ? withUsagePlan({
                       ...item,
                       plan_type: metadata.plan_type ?? item.plan_type,
@@ -152,6 +153,11 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
               )
             );
           } catch (err) {
+            if (String(err) === USAGE_BASED_ERROR || (err instanceof Error && err.message === USAGE_BASED_ERROR)) {
+              const failed = buildUsageError(account.id, USAGE_BASED_ERROR, USAGE_BASED_PLAN);
+              setAccounts(previous => previous.map(item => item.id === account.id
+                ? withUsagePlan({ ...item, usage: mergeUsageResult(item.usage, failed) }, failed) : item));
+            }
             console.warn("Failed to refresh account metadata:", err);
           } finally {
             metadataRefreshInFlightRef.current.delete(account.id);
@@ -160,7 +166,7 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
         maxConcurrentUsageRequests
       );
     },
-    [maxConcurrentUsageRequests, runWithConcurrency]
+    [buildUsageError, maxConcurrentUsageRequests, runWithConcurrency]
   );
 
   const refreshUsage = useCallback(
@@ -248,6 +254,7 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
   ) => {
     try {
       const account = accountsRef.current.find((item) => item.id === accountId);
+      if (isUsageRefreshPaused(account?.plan_type) && !options?.manual) return buildUsageError(accountId, USAGE_BASED_ERROR, USAGE_BASED_PLAN);
       if (account?.credentials_invalid && !options?.manual) throw new Error("Account credentials invalid; sign in again");
       const metadataPromise = options?.refreshMetadata && account && !account.credentials_invalid
         ? refreshMetadata([account])
@@ -486,7 +493,7 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
       const unlisten = await listen<UsageInfo[]>("background-usage-updated", ({ payload }) => {
         setAccounts(previous => previous.map(account => {
           const usage = payload.find(usage => usage.account_id === account.id);
-          return usage ? { ...account, usage: mergeUsageResult(account.usage, usage) } : account;
+          return usage ? withUsagePlan({ ...account, usage: mergeUsageResult(account.usage, usage) }, usage) : account;
         }));
       });
       if (disposed) unlisten(); else stop = unlisten;

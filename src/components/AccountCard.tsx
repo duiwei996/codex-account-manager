@@ -1,4 +1,4 @@
-import { normalizeAccountPlan } from "../lib/accountPlan.ts";
+import { isUsageRefreshPaused, normalizeAccountPlan } from "../lib/accountPlan.ts";
 import { RESET_CACHE_CHANGED_EVENT, readResetCreditsCache, readStatsCache, writeStatsCache } from "../lib/accountCache";
 import { ActionIcon } from "./ActionIcon";
 import { getLocale, tr, useLocale } from "../lib/i18n";
@@ -189,7 +189,7 @@ export function AccountCard({
     }
   };
 
-  const planDisplay = account.auth_mode === "api_key" ? "API Key" : account.plan_type ? (normalizeAccountPlan(account.plan_type) === "self_serve_business_usage_based" ? t("Team pay-as-you-go") : normalizeAccountPlan(account.plan_type)) : t("Unknown");
+  const planDisplay = account.auth_mode === "api_key" ? "API Key" : account.plan_type ? normalizeAccountPlan(account.plan_type) : t("Unknown");
 
   const planColors: Record<string, string> = {
     pro: "bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-300 dark:border-indigo-700",
@@ -201,7 +201,7 @@ export function AccountCard({
   };
 
   const planKey = account.auth_mode === "api_key" ? "api_key" : normalizeAccountPlan(account.plan_type);
-  const planColorClass = planColors[planKey === "self_serve_business_usage_based" ? "team" : planKey] || planColors.free;
+  const planColorClass = planColors[planKey] || planColors.free;
   const showSubscriptionStatus =
     account.auth_mode === "chat_g_p_t" && account.plan_type?.toLowerCase() !== "free";
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at);
@@ -210,7 +210,7 @@ export function AccountCard({
   const loadResetCredits = useCallback(async () => {
     const requestId = ++resetRequestSeq.current;
 
-    if (account.risk_controlled || account.credentials_invalid || account.auth_mode !== "chat_g_p_t") {
+    if (account.risk_controlled || account.credentials_invalid || isUsageRefreshPaused(account.plan_type) || account.auth_mode !== "chat_g_p_t") {
       setResetCredits(account.auth_mode === "chat_g_p_t" ? readResetCreditsCache(account.id)?.data ?? null : null);
       return;
     }
@@ -226,7 +226,7 @@ export function AccountCard({
       if (requestId !== resetRequestSeq.current) return;
       setResetCredits(readResetCreditsCache(account.id)?.data ?? null);
     }
-  }, [account.auth_mode, account.id, account.credentials_invalid, account.risk_controlled]);
+  }, [account.auth_mode, account.id, account.credentials_invalid, account.risk_controlled, account.plan_type]);
 
   const handleStatsLoaded = useCallback(
     (stats: AccountUsageStatsInfo | null) => {
@@ -279,6 +279,9 @@ export function AccountCard({
             )}
             {account.credentials_invalid && (
               <span className="shrink-0 rounded-md bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">{t("Login expired")}</span>
+            )}
+            {isUsageRefreshPaused(account.plan_type) && (
+              <span className="shrink-0 rounded-md bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">{t("Automatic refresh paused")}</span>
             )}
             {isEditing ? (
               <input
@@ -345,7 +348,7 @@ export function AccountCard({
       <div className={`mb-4 grid grid-cols-1 gap-4 ${account.is_active ? "sm:grid-cols-2" : ""}`}>
         <section className="min-w-0 rounded-xl bg-gray-50 p-3 dark:bg-gray-950/40">
           <h4 className="mb-3 text-xs font-medium text-gray-500 dark:text-gray-400">{locale === "zh-CN" ? "账号额度" : "Allowance"}</h4>
-          <UsageBar usage={account.usage} loading={isRefreshing || account.usageLoading} />
+          <UsageBar usage={account.usage} loading={isRefreshing || account.usageLoading} refreshPaused={isUsageRefreshPaused(account.plan_type)} />
           {account.credentials_invalid && account.usage && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">{t("Cached usage")}</p>}
           {account.usage?.error && <button onClick={() => void handleRefresh().catch(() => {})} disabled={isRefreshing || account.usageLoading} className="mt-2 text-xs font-medium text-blue-600 hover:underline disabled:opacity-50 dark:text-blue-400">{t("Retry")}</button>}
         </section>

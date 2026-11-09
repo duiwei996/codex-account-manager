@@ -1,4 +1,6 @@
 export default {
+  "Automatic refresh paused": "Automatic refresh paused",
+  "No cached quota available": "No cached quota available",
   "Team pay-as-you-go": "Team pay-as-you-go",
   "WebDAV Sync": "WebDAV Sync",
   "WebDAV sync is available in the desktop app.": "WebDAV sync is available in the desktop app.",

@@ -18,7 +18,7 @@ export function groupAccountsByPlan<T extends AccountInfo>(accounts: readonly T[
     group.push(account);
     groups.set(key, group);
   }
-  const order = ["free", "plus", "team", "self_serve_business_usage_based", "pro", "business", "enterprise", "edu", "api_key", "unknown"];
+  const order = ["free", "plus", "team", "pro", "business", "enterprise", "edu", "api_key", "unknown"];
   return [...groups].sort(([a], [b]) => {
     const rank = (key: string) => key === "unknown" ? 100 : order.includes(key) ? order.indexOf(key) : 50;
     return rank(a) - rank(b) || a.localeCompare(b);

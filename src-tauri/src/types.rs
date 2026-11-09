@@ -81,6 +81,14 @@ impl Default for AppSettings {
     }
 }
 
+pub const USAGE_BASED_PLAN: &str = "self_serve_business_usage_based";
+pub const USAGE_BASED_ERROR: &str =
+    "Team pay-as-you-go: usage refresh failed; automatic refresh paused";
+
+pub fn is_usage_refresh_paused(plan: Option<&str>) -> bool {
+    plan.is_some_and(|plan| plan.trim().eq_ignore_ascii_case(USAGE_BASED_PLAN))
+}
+
 impl AppSettings {
     pub fn includes_category(&self, account: &StoredAccount) -> bool {
         if account.risk_controlled || self.selected_plan_tab == "risk" {
@@ -97,12 +105,18 @@ impl AppSettings {
                 .unwrap_or("unknown")
                 .to_lowercase()
         };
+        let key = if is_usage_refresh_paused(Some(&key)) {
+            "team"
+        } else {
+            &key
+        };
         self.selected_plan_tab == "all" || self.selected_plan_tab == key
     }
 
     pub fn should_refresh(&self, account: &StoredAccount, active_id: Option<&str>) -> bool {
         !account.risk_controlled
             && !account.credentials_invalid
+            && !is_usage_refresh_paused(account.plan_type.as_deref())
             && self.selected_plan_tab != "risk"
             && match self.refresh_scope {
                 RefreshScope::Current => active_id == Some(account.id.as_str()),
@@ -676,6 +690,20 @@ impl std::fmt::Debug for TokenData {
 #[cfg(test)]
 mod risk_control_tests {
     use super::*;
+
+    #[test]
+    fn converted_seat_refresh_remains_paused_after_restart_and_resumes_with_team() {
+        let mut account = StoredAccount::new_api_key("test".into(), "test-key".into());
+        account.plan_type = Some(USAGE_BASED_PLAN.into());
+        let saved = serde_json::to_value(&account).unwrap();
+        let mut restored: StoredAccount = serde_json::from_value(saved).unwrap();
+        let settings = AppSettings::default();
+        assert!(!settings.should_refresh(&restored, Some(&restored.id)));
+        assert!(!settings.should_refresh(&restored, None));
+        assert!(!restored.credentials_invalid);
+        restored.plan_type = Some("team".into());
+        assert!(settings.should_refresh(&restored, Some(&restored.id)));
+    }
 
     #[test]
     fn risk_is_persistent_and_excluded_from_normal_categories_and_polling() {

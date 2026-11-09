@@ -3,6 +3,7 @@ import { readAccountCache, readStatsCache, writeStatsCache } from "./lib/account
 import { ActionIcon } from "./components/ActionIcon";
 import { localizeError } from "./lib/errors";
 import { selectRefreshAccounts } from "./lib/refreshPolicy";
+import { isUsageRefreshPaused } from "./lib/accountPlan";
 import { mergeUsageResult, withUsagePlan } from "./lib/usageDisplay";
 import type { RuntimePreferences } from "./hooks/useRuntimePreferences";
 import { getLocale, tr, useLocale } from "./lib/i18n";
@@ -42,7 +43,6 @@ function formatError(err: unknown): string {
 function formatPlan(plan: string | null): string | null {
   const trimmed = plan?.trim() ? normalizeAccountPlan(plan) : null;
   if (!trimmed) return null;
-  if (trimmed === "self_serve_business_usage_based") return tr("Team pay-as-you-go", getLocale());
   return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
 }
 
@@ -187,7 +187,7 @@ function TrayMenu() {
 
   const loadActiveStats = useCallback(async (list: AccountInfo[]) => {
     const active = list.find((account) => account.is_active);
-    if (!active) return;
+    if (!active || isUsageRefreshPaused(active.plan_type)) return;
 
     try {
       const stats = await invokeBackend<AccountUsageStats>("get_account_usage_stats", {

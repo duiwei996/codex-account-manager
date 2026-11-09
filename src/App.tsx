@@ -555,7 +555,8 @@ function App() {
     setIsRefreshing(true);
     setRefreshSuccess(false);
     try {
-      const results = await refreshUsage(getCategoryTargets(), { refreshMetadata: true });
+      const targets = selectRefreshAccounts(accountsRef.current, "category", selectedPlanTabRef.current, true);
+      const results = await refreshUsage(targets, { refreshMetadata: true });
       const failures = results?.filter(usage => usage.error).length ?? 0;
       if (failures) {showWarmupToast(msg(`${failures} accounts could not refresh. Check the account messages.`, `${failures} 个账号刷新失败，请查看账号卡片中的提示。`), true);return;}
       setRefreshSuccess(true);
@@ -1111,7 +1112,7 @@ function App() {
   const visibleAccounts = accountPanel.otherAccounts.filter(account => matchesAccountSearch(account, normalizedAccountSearchQuery));
   const hasNoMatchingAccounts = !currentAccount && visibleAccounts.length === 0;
   const getPlanTabLabel = (key: string) => key === "all" ? t("All") : key === "free" ? t("Free accounts") :
-    key === "self_serve_business_usage_based" ? t("Team pay-as-you-go") : key === "risk" ? t("Risk control") : key === "team" ? t("Team") : key === "api_key" ? t("API key accounts") : key === "unknown" ? t("Unknown plan") : key;
+    key === "risk" ? t("Risk control") : key === "team" ? t("Team") : key === "api_key" ? t("API key accounts") : key === "unknown" ? t("Unknown plan") : key;
 
   const renderAccountCard = (account: AccountWithUsage) => (
     <AccountCard

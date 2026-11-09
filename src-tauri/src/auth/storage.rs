@@ -642,6 +642,35 @@ pub fn update_account_metadata(
     })
 }
 
+/// Metadata can pause a converted seat; only successful quota queries resume it.
+pub(crate) fn observe_quota_plan(
+    account_id: &str,
+    plan: Option<String>,
+    allow_resume: bool,
+) -> Result<()> {
+    let Some(plan) = plan else {
+        return Ok(());
+    };
+    update_accounts(|store| {
+        let account = store
+            .accounts
+            .iter_mut()
+            .find(|a| a.id == account_id)
+            .context("Account not found")?;
+        if !allow_resume
+            && crate::types::is_usage_refresh_paused(account.plan_type.as_deref())
+            && !crate::types::is_usage_refresh_paused(Some(&plan))
+        {
+            return Ok(());
+        }
+        if account.plan_type.as_ref() != Some(&plan) {
+            account.plan_type = Some(plan);
+            mark_sync_updated(account, Utc::now());
+        }
+        Ok(())
+    })
+}
+
 /// Update ChatGPT OAuth tokens for an account and return the updated account.
 pub fn update_account_chatgpt_tokens(
     account_id: &str,

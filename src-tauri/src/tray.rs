@@ -211,6 +211,12 @@ fn watch_system_theme<R: Runtime>(app: AppHandle<R>) {
 pub fn ingest_usage<R: Runtime>(app: &AppHandle<R>, usages: Vec<UsageInfo>) {
     if let Ok(mut cache) = TRAY_USAGE.lock() {
         for usage in usages {
+            if usage.error.is_some() {
+                if let Some(previous) = cache.get_mut(&usage.account_id) {
+                    previous.error = usage.error;
+                    continue;
+                }
+            }
             cache.insert(usage.account_id.clone(), usage);
         }
     }
@@ -419,12 +425,17 @@ fn active_usage_title(active_account_id: Option<&str>) -> String {
         .and_then(|cache| cache.get(active_account_id).cloned());
 
     match usage {
-        Some(usage) if usage.error.is_none() => usage_title(
-            usage.primary_used_percent,
-            usage.primary_window_minutes,
-            usage.secondary_used_percent,
-            usage.secondary_window_minutes,
-        ),
+        Some(usage)
+            if usage.error.is_none()
+                || usage.error.as_deref() == Some(crate::types::USAGE_BASED_ERROR) =>
+        {
+            usage_title(
+                usage.primary_used_percent,
+                usage.primary_window_minutes,
+                usage.secondary_used_percent,
+                usage.secondary_window_minutes,
+            )
+        }
         _ => "H:-- W:--".to_string(),
     }
 }
@@ -491,7 +502,7 @@ fn usage_suffix(account_id: &str) -> String {
     let Some(usage) = cache.get(account_id) else {
         return String::new();
     };
-    if usage.error.is_some() {
+    if usage.error.is_some() && usage.error.as_deref() != Some(crate::types::USAGE_BASED_ERROR) {
         return String::new();
     }
 

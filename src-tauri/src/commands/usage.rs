@@ -4,10 +4,10 @@ use crate::api::usage::{
     fetch_chatgpt_account_metadata, get_account_usage, refresh_all_usage,
     warmup_account as send_warmup, ChatGptAccountMetadata,
 };
-use crate::auth::{
-    ensure_chatgpt_tokens_fresh, get_account, load_accounts, update_account_metadata,
+use crate::auth::{ensure_chatgpt_tokens_fresh, get_account, load_accounts};
+use crate::types::{
+    is_usage_refresh_paused, AccountInfo, AuthData, UsageInfo, WarmupSummary, USAGE_BASED_ERROR,
 };
-use crate::types::{AccountInfo, AuthData, UsageInfo, WarmupSummary};
 use futures::{stream, StreamExt};
 use std::{
     collections::HashMap,
@@ -34,6 +34,9 @@ pub(crate) fn invalidate_account_metadata(account_ids: &[String]) {
 }
 
 pub(crate) fn apply_cached_account_metadata(account: &mut AccountInfo) {
+    if is_usage_refresh_paused(account.plan_type.as_deref()) {
+        return;
+    }
     let Ok(cache) = ACCOUNT_METADATA_CACHE.lock() else {
         return;
     };
@@ -135,14 +138,16 @@ pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo,
                 }
             };
 
-            update_account_metadata(
+            crate::auth::storage::observe_quota_plan(
                 &account_id,
-                None,
-                None,
                 live_metadata.plan_type.clone(),
-                None,
+                false,
             )
             .map_err(|e| e.to_string())?;
+
+            if is_usage_refresh_paused(live_metadata.plan_type.as_deref()) {
+                return Err(USAGE_BASED_ERROR.to_string());
+            }
 
             ACCOUNT_METADATA_CACHE
                 .lock()

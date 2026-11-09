@@ -13,8 +13,9 @@ use std::collections::HashMap;
 
 use crate::auth::{ensure_chatgpt_tokens_fresh, refresh_chatgpt_tokens};
 use crate::types::{
-    AuthData, CreditStatusDetails, RateLimitDetails, RateLimitStatusPayload, RateLimitWindow,
-    StoredAccount, UsageInfo,
+    is_usage_refresh_paused, AuthData, CreditStatusDetails, RateLimitDetails,
+    RateLimitStatusPayload, RateLimitWindow, StoredAccount, UsageInfo, USAGE_BASED_ERROR,
+    USAGE_BASED_PLAN,
 };
 
 const CHATGPT_BACKEND_API: &str = "https://chatgpt.com/backend-api";
@@ -94,7 +95,11 @@ pub async fn get_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
     };
     let mut cached = request.lock().await;
     if let Some((time, key, usage)) = &*cached {
-        if time.elapsed() < std::time::Duration::from_secs(20) && key == &fingerprint {
+        if !is_usage_refresh_paused(account.plan_type.as_deref())
+            && usage.error.is_none()
+            && time.elapsed() < std::time::Duration::from_secs(20)
+            && key == &fingerprint
+        {
             return Ok(usage.clone());
         }
     }
@@ -108,6 +113,13 @@ pub async fn get_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
         crate::auth::storage::mark_credentials_invalid(account, &error)?;
     }
     let usage = result?;
+    if is_usage_refresh_paused(usage.plan_type.as_deref())
+        || (usage.error.is_none()
+            && usage.plan_type.is_some()
+            && is_usage_refresh_paused(account.plan_type.as_deref()))
+    {
+        crate::auth::storage::observe_quota_plan(&account.id, usage.plan_type.clone(), true)?;
+    }
     *cached = Some((std::time::Instant::now(), fingerprint, usage.clone()));
     Ok(usage)
 }
@@ -441,6 +453,11 @@ async fn send_chatgpt_warmup_request(
 }
 
 fn convert_payload_to_usage_info(account_id: &str, payload: RateLimitStatusPayload) -> UsageInfo {
+    if is_usage_refresh_paused(Some(&payload.plan_type)) {
+        let mut usage = UsageInfo::error(account_id.to_string(), USAGE_BASED_ERROR.to_string());
+        usage.plan_type = Some(USAGE_BASED_PLAN.to_string());
+        return usage;
+    }
     let (primary, secondary) = extract_rate_limits(payload.rate_limit);
     let credits = extract_credits(payload.credits);
 
@@ -528,6 +545,21 @@ pub async fn refresh_all_usage(accounts: &[StoredAccount]) -> Vec<UsageInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn converted_team_seats_are_failures_even_when_payload_contains_quota() {
+        let payload = serde_json::from_value(serde_json::json!({
+            "plan_type": " SELF_SERVE_BUSINESS_USAGE_BASED ",
+            "rate_limit": {"primary_window": {"used_percent": 0.0}, "secondary_window": null},
+            "credits": {"has_credits": true, "unlimited": true, "balance": "100"}
+        }))
+        .unwrap();
+        let usage = convert_payload_to_usage_info("a", payload);
+        assert_eq!(usage.error.as_deref(), Some(USAGE_BASED_ERROR));
+        assert_eq!(usage.plan_type.as_deref(), Some(USAGE_BASED_PLAN));
+        assert!(usage.primary_used_percent.is_none());
+        assert!(usage.credits_balance.is_none());
+    }
 
     fn rate_limit_window(used_percent: f64, window_seconds: i32) -> RateLimitWindow {
         RateLimitWindow {

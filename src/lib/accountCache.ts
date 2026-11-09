@@ -1,5 +1,6 @@
 import type { AccountWithUsage, AccountUsageStats, UsageInfo, AccountResetCredits } from "../types";
 import { withUsagePlan } from "./usageDisplay.ts";
+import { isUsageRefreshPaused, USAGE_BASED_ERROR } from "./accountPlan.ts";
 
 export const ACCOUNT_CACHE_KEY = "codex-switcher-account-display-cache-v1";
 export const STATS_CACHE_KEY = "codex-switcher-account-stats-cache-v1";
@@ -19,7 +20,7 @@ function write(key: string, value: unknown): void {
 }
 
 export function cleanUsage(value: unknown, accountId: string): UsageInfo | undefined {
-  if (!object(value) || value.account_id !== accountId || !date(value.recorded_at)) return undefined;
+  if (!object(value) || value.account_id !== accountId || !date(value.recorded_at) || isUsageRefreshPaused(string(value.plan_type))) return undefined;
   return {
     account_id: accountId, recorded_at: date(value.recorded_at), from_cache: true, error: null,
     plan_type: string(value.plan_type),
@@ -39,7 +40,10 @@ function cleanAccount(value: unknown): AccountWithUsage | undefined {
     credentials_invalid: value.credentials_invalid === true,
     risk_controlled: value.risk_controlled === true,
     created_at: date(value.created_at) ?? new Date(0).toISOString(), last_used_at: date(value.last_used_at) ?? null,
-    metadata_recorded_at: date(value.metadata_recorded_at), usage: cleanUsage(value.usage, value.id), usageLoading: false,
+    metadata_recorded_at: date(value.metadata_recorded_at), usage: (() => {
+      const usage = cleanUsage(value.usage, value.id);
+      return usage && isUsageRefreshPaused(string(value.plan_type)) ? { ...usage, error: USAGE_BASED_ERROR } : usage;
+    })(), usageLoading: false,
   }, cleanUsage(value.usage, value.id));
 }
 export function readAccountCache(): AccountWithUsage[] {
@@ -50,16 +54,22 @@ export function readAccountCache(): AccountWithUsage[] {
 export function writeAccountCache(accounts: AccountWithUsage[], replace = false): void {
   // Project only display fields. Errors, pending requests and credentials are never persisted.
   const previous = new Map(readAccountCache().map(a => [a.id,a]));
-  write(ACCOUNT_CACHE_KEY, accounts.map(cleanAccount).filter((a): a is AccountWithUsage => !!a).map(a => replace ? a : mergeAccountQuota(a,previous.get(a.id))));
+  write(ACCOUNT_CACHE_KEY, accounts.map(cleanAccount).filter((a): a is AccountWithUsage => !!a)
+    .map(a => replace ? a : mergeAccountQuota(a,previous.get(a.id)))
+    .map(a => ({ ...a, usage: a.usage ? { ...a.usage, error: null } : undefined })));
 }
 export function mergeAccountQuota(account: AccountWithUsage, cached?: AccountWithUsage): AccountWithUsage {
-  if (!cached) return withUsagePlan(account, account.usage);
+  if (!cached) return isUsageRefreshPaused(account.plan_type)
+    ? { ...account, usage: account.usage ? { ...account.usage, from_cache: true, error: USAGE_BASED_ERROR } : undefined }
+    : withUsagePlan(account, account.usage);
   const metadataNewer = cacheTime(cached.metadata_recorded_at) > cacheTime(account.metadata_recorded_at);
   const merged = { ...account,
     ...(metadataNewer ? { subscription_expires_at:cached.subscription_expires_at,metadata_recorded_at:cached.metadata_recorded_at } : {}),
     usage:cacheTime(cached.usage?.recorded_at) > cacheTime(account.usage?.recorded_at) ? cached.usage : account.usage,
   };
-  return withUsagePlan(merged, merged.usage);
+  return isUsageRefreshPaused(merged.plan_type)
+    ? { ...merged, usage: merged.usage ? { ...merged.usage, from_cache: true, error: USAGE_BASED_ERROR } : undefined }
+    : withUsagePlan(merged, merged.usage);
 }
 export interface CachedResetCredits { recorded_at: string; data: AccountResetCredits }
 function cleanResetCache(value: unknown): CachedResetCredits | null {

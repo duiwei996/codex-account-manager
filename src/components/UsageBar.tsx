@@ -1,10 +1,12 @@
 import { localizeError } from "../lib/errors";
+import { USAGE_BASED_ERROR } from "../lib/accountPlan";
 import { getLocale, tr, useLocale } from "../lib/i18n";
 import type { UsageInfo } from "../types";
 
 interface UsageBarProps {
   usage?: UsageInfo;
   loading?: boolean;
+  refreshPaused?: boolean;
 }
 
 function formatExactResetTime(resetAt: number | null | undefined): string {
@@ -74,9 +76,10 @@ function RateLimitBar({
   );
 }
 
-export function UsageBar({ usage, loading }: UsageBarProps) {
+export function UsageBar({ usage, loading, refreshPaused }: UsageBarProps) {
   const locale = useLocale();
   const t = (text: string) => tr(text, locale);
+  if (refreshPaused && !usage) return <p role="status" className="text-xs text-amber-700 dark:text-amber-300">{localizeError(USAGE_BASED_ERROR, locale)} · {t("No cached quota available")}</p>;
   if (loading && !usage) {
     return (
       <div className="space-y-2">
@@ -102,6 +105,7 @@ export function UsageBar({ usage, loading }: UsageBarProps) {
     return (
       <div className="text-xs text-gray-400 dark:text-gray-500 italic py-1">
         {localizeError(usage.error, locale)}
+        {usage.error === USAGE_BASED_ERROR && ` · ${t("No cached quota available")}`}
       </div>
     );
   }

@@ -488,6 +488,66 @@ test("invalid login skips automatic and batch refresh but allows an explicit sin
   }
 });
 
+test("converted team seats preserve cached quota across reload, skip automatic requests, and recover manually", async () => {
+  await act(async () => root.render(null));
+  localStorage.clear();
+  failUsage = false;
+  const plan = "self_serve_business_usage_based";
+  const stamp = "2026-11-09T00:00:00Z";
+  const old = { ...account("converted", true), auth_mode: "chat_g_p_t", plan_type: "team", subscription_expires_at: "2027-01-01T00:00:00Z" };
+  accounts = [old];
+  writeAccountCache([{ ...old, usage: { account_id: old.id, plan_type: "team", primary_used_percent: 35,
+    secondary_used_percent: 65, primary_resets_at: 1900000000, recorded_at: stamp, error: null } }]);
+  let controller;
+  let ready = false;
+  function Harness() { controller = useAccounts(defaults, ready); return null; }
+  customUsage = id => {
+    accounts = accounts.map(a => ({ ...a, plan_type: plan }));
+    return { account_id: id, plan_type: plan, primary_used_percent: 0, secondary_used_percent: 0, error: null };
+  };
+  customMetadata = async () => { await new Promise(resolve => setTimeout(resolve, 30)); return old; };
+  try {
+    await act(async () => root.render(createElement(Harness)));
+    await settle();
+    await act(async () => controller.refreshSingleUsage(old.id, { manual: true, refreshMetadata: true }));
+    assert.equal(controller.accounts[0].plan_type, plan);
+    assert.equal(controller.accounts[0].usage.primary_used_percent, 35);
+    assert.equal(controller.accounts[0].usage.primary_resets_at, 1900000000);
+    assert.equal(controller.accounts[0].usage.recorded_at, stamp);
+    assert.equal(controller.accounts[0].usage.from_cache, true);
+    assert.match(controller.accounts[0].usage.error, /Team pay-as-you-go/);
+    await act(async () => root.render(null));
+    ready = true;
+    calls.length = 0;
+    await act(async () => root.render(createElement(Harness)));
+    await settle();
+    assert.equal(calls.filter(c => ["get_usage", "refresh_account_metadata"].includes(c.command)).length, 0);
+    assert.equal(controller.accounts[0].usage.primary_used_percent, 35);
+    assert.equal(controller.accounts[0].usage.recorded_at, stamp);
+    await act(async () => controller.refreshSingleUsage(old.id, { manual: true }));
+    assert.equal(controller.accounts[0].usage.recorded_at, stamp);
+    customUsage = id => {
+      accounts = accounts.map(a => ({ ...a, plan_type: "team" }));
+      return { account_id: id, plan_type: "team", primary_used_percent: 45, secondary_used_percent: 70, error: null };
+    };
+    await act(async () => controller.refreshSingleUsage(old.id, { manual: true }));
+    assert.equal(controller.accounts[0].plan_type, "team");
+    assert.equal(controller.accounts[0].usage.primary_used_percent, 45);
+    assert.equal(controller.accounts[0].usage.error, null);
+    assert.equal(controller.accounts[0].usage.from_cache, false);
+    assert.notEqual(controller.accounts[0].usage.recorded_at, stamp);
+    const { selectRefreshAccounts } = await server.ssrLoadModule("/src/lib/refreshPolicy.ts");
+    assert.equal(selectRefreshAccounts(controller.accounts, "current").length, 1);
+    const { UsageBar } = await server.ssrLoadModule("/src/components/UsageBar.tsx");
+    await act(async () => root.render(createElement(UsageBar, { refreshPaused: true })));
+    assert.match(document.body.textContent, /暂无有效额度缓存/);
+  } finally {
+    customUsage = null; customMetadata = null;
+    await act(async () => root.render(null));
+    localStorage.clear();
+  }
+});
+
 test("paused WebDAV sync is visible on the main page and opens the sync settings directly", async () => {
   const { default: App } = await server.ssrLoadModule("/src/App.tsx");
   const sync = await server.ssrLoadModule("/src/lib/webdav.ts");

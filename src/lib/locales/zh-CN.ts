@@ -1,4 +1,6 @@
 export default {
+  "Automatic refresh paused": "自动刷新已暂停",
+  "No cached quota available": "暂无有效额度缓存",
   "Team pay-as-you-go": "团队按量付费",
   "WebDAV Sync": "WebDAV 同步",
   "WebDAV sync is available in the desktop app.": "请在桌面应用中使用 WebDAV 同步。",

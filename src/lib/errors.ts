@@ -1,4 +1,5 @@
 import { getLocale, tr, type AppLocale } from "./i18n.ts";
+import { USAGE_BASED_ERROR } from "./accountPlan.ts";
 
 const transferErrors: Record<string, string> = {
   "CPA Codex 格式仅支持登录账号，请使用官方格式导出 API Key 账号": "CPA supports login accounts only. Export API key accounts in official format.",
@@ -21,6 +22,9 @@ const transferErrors: Record<string, string> = {
 
 export function localizeError(error: unknown, locale: AppLocale = getLocale()): string {
   const message = error instanceof Error ? error.message : String(error ?? "");
+  if (message === USAGE_BASED_ERROR) return locale === "zh-CN"
+    ? "当前类型已变为团队按量付费，额度刷新失败，已暂停自动刷新；有缓存时继续显示最近缓存信息"
+    : "The current type is Team pay-as-you-go. Usage refresh failed and automatic refresh is paused; the last cached quota is retained when available.";
   if (transferErrors[message]) return locale === "zh-CN" ? message : transferErrors[message];
   const translated = tr(message, locale);
   if (translated !== message) return translated;
