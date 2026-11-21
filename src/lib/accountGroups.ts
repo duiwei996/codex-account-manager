@@ -1,4 +1,4 @@
-import { normalizeAccountPlan } from "./accountPlan.ts";
+import { isAccountUnavailable, normalizeAccountPlan } from "./accountPlan.ts";
 import type { AccountInfo } from "../types";
 
 export function getAccountPlanKey(account: AccountInfo) {
@@ -22,7 +22,7 @@ export function groupAccountsByPlan<T extends AccountInfo>(accounts: readonly T[
   return [...groups].sort(([a], [b]) => {
     const rank = (key: string) => key === "unknown" ? 100 : order.includes(key) ? order.indexOf(key) : 50;
     return rank(a) - rank(b) || a.localeCompare(b);
-  }).map(([key, accounts]) => ({ key, accounts: [...accounts].sort((a, b) => Number(!!a.credentials_invalid) - Number(!!b.credentials_invalid)) }));
+  }).map(([key, accounts]) => ({ key, accounts: [...accounts].sort((a, b) => Number(isAccountUnavailable(a)) - Number(isAccountUnavailable(b))) }));
 }
 
 /** The account in use stays pinned independently of the selected category. */

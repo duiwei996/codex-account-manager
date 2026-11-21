@@ -3,6 +3,7 @@ import { WebDavSyncDialog } from "./components/WebDavSyncDialog";
 import { CenteredSelect } from "./components/CenteredSelect";
 import { DAV_NOTICE_EVENT, DAV_STATE_EVENT, davState, startDavAutoSync } from "./lib/webdav";
 import { groupAccountsByPlan, selectAccountPanel } from "./lib/accountGroups";
+import { isAccountUnavailable } from "./lib/accountPlan";
 import { selectRefreshAccounts } from "./lib/refreshPolicy";
 import { ActionIcon } from "./components/ActionIcon";
 import { localizeError } from "./lib/errors";
@@ -1031,8 +1032,8 @@ function App() {
     };
 
     return [...accounts].sort((a, b) => {
-      const invalidDiff = Number(!!a.credentials_invalid) - Number(!!b.credentials_invalid);
-      if (invalidDiff) return invalidDiff;
+      const unavailableDiff = Number(isAccountUnavailable(a)) - Number(isAccountUnavailable(b));
+      if (unavailableDiff) return unavailableDiff;
       const activeDiff = Number(b.is_active) - Number(a.is_active);
       if (activeDiff) return activeDiff;
       if (

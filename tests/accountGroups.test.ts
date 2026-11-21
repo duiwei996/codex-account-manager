@@ -80,11 +80,15 @@ test("risk isolation excludes active and inactive accounts from ordinary panels 
 });
 
 
-test("usage-based seats remain in team without modifying their raw refresh state", () => {
- const expired = { id: "old", auth_mode: "chat_g_p_t", plan_type: "self_serve_business_usage_based", credentials_invalid: true } as AccountInfo;
- const valid = { id: "new", auth_mode: "chat_g_p_t", plan_type: "team" } as AccountInfo;
- assert.equal(getAccountPlanKey(expired), "team");
- assert.deepEqual(groupAccountsByPlan([expired, valid], true).map(g => [g.key, g.accounts.map(a => a.id)]), [["team", ["new", "old"]]]);
- assert.deepEqual(selectAccountPanel([expired, valid], "team").otherAccounts.map(a => a.id), ["old", "new"]);
- assert.equal(expired.plan_type, "self_serve_business_usage_based");
+test("team groups put valid accounts first and preserve the order of unavailable accounts", () => {
+  const usageBased = { id: "usage-based", auth_mode: "chat_g_p_t", plan_type: "self_serve_business_usage_based", credentials_invalid: false } as AccountInfo;
+  const expired = { id: "expired", auth_mode: "chat_g_p_t", plan_type: "team", credentials_invalid: true } as AccountInfo;
+  const valid = { id: "valid", auth_mode: "chat_g_p_t", plan_type: "team" } as AccountInfo;
+  assert.equal(getAccountPlanKey(usageBased), "team");
+  for (const unavailable of [[usageBased, expired], [expired, usageBased]]) {
+    const groups = groupAccountsByPlan([...unavailable, valid], true);
+    assert.deepEqual(groups.map(g => [g.key, g.accounts.map(a => a.id)]),
+      [["team", [valid.id, ...unavailable.map(a => a.id)]]]);
+  }
+  assert.equal(usageBased.credentials_invalid, false);
 });
