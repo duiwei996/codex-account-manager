@@ -6,7 +6,6 @@ const components = [
   "../src/App.tsx",
   "../src/TrayMenu.tsx",
   "../src/components/AccountCard.tsx",
-  "../src/components/AccountUsageStats.tsx",
   "../src/components/AddAccountModal.tsx",
   "../src/components/ResetCreditsMenu.tsx",
   "../src/components/UsageBar.tsx",

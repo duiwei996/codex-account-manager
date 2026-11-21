@@ -1,10 +1,16 @@
 import type { AccountInfo, AccountResetCredits, AccountWithUsage, UsageInfo } from "../types";
 import { ACCOUNT_QUOTA_CHANGED_EVENT, cacheTime, cleanUsage, mergeAccountQuota, readAccountCache, readResetCreditsCache, writeAccountCache, writeResetCreditsCache } from "./accountCache";
+import { isUsageRefreshPaused } from "./accountPlan";
 
 export interface AccountSyncCache {
   metadata?: { recorded_at:string; subscription_expires_at:string | null };
   usage?: Omit<UsageInfo,"account_id" | "plan_type" | "error" | "from_cache" | "recorded_at"> & { recorded_at:string };
   resets?: { recorded_at:string; credits:{ id:string; expires_at:string | null; title:string | null }[] };
+}
+function restoreSyncedUsage(account: AccountInfo, usage: AccountSyncCache["usage"]): UsageInfo | undefined {
+  if (!usage) return undefined;
+  const plan = isUsageRefreshPaused(account.plan_type) ? null : account.plan_type;
+  return cleanUsage({ ...usage, account_id: account.id, plan_type: plan }, account.id);
 }
 export function collectAccountSyncCaches(): Record<string,AccountSyncCache> {
   const result: Record<string,AccountSyncCache> = {};
@@ -27,7 +33,7 @@ export function applyAccountSyncCaches(accounts: AccountInfo[], caches: Record<s
     let merged: AccountWithUsage = { ...account,subscription_expires_at:cacheTime(old?.metadata_recorded_at) ? old!.subscription_expires_at : account.subscription_expires_at,metadata_recorded_at:old?.metadata_recorded_at,usage:old?.usage,usageLoading:false };
     if (!cache) return mergeAccountQuota(merged,old);
     if (cache.metadata && cacheTime(cache.metadata.recorded_at) >= cacheTime(old?.metadata_recorded_at)) merged = { ...merged,subscription_expires_at:cache.metadata.subscription_expires_at,metadata_recorded_at:cache.metadata.recorded_at };
-    if (cache.usage && cacheTime(cache.usage.recorded_at) >= cacheTime(old?.usage?.recorded_at)) merged.usage = cleanUsage({ ...cache.usage,account_id:account.id,plan_type:account.plan_type },account.id);
+    if (cache.usage && cacheTime(cache.usage.recorded_at) >= cacheTime(old?.usage?.recorded_at)) merged.usage = restoreSyncedUsage(account, cache.usage);
     if (cache.resets) {
       const data:AccountResetCredits = { available_count:0,next_expires_at:null,credits:cache.resets.credits.map(c=>({ ...c,status:"available",reset_type:"",granted_at:null,redeem_started_at:null,redeemed_at:null,description:null })) };
       writeResetCreditsCache(account.id,data,cache.resets.recorded_at);
@@ -48,7 +54,7 @@ export function replaceAccountSyncCaches(accounts: AccountInfo[], caches: Record
     writeResetCreditsCache(account.id, data, cache?.resets?.recorded_at ?? new Date().toISOString(), true);
     return { ...account, subscription_expires_at: cache?.metadata?.subscription_expires_at ?? null,
       metadata_recorded_at: cache?.metadata?.recorded_at,
-      usage: cache?.usage ? cleanUsage({ ...cache.usage, account_id: account.id, plan_type: account.plan_type }, account.id) : undefined,
+      usage: restoreSyncedUsage(account, cache?.usage),
       usageLoading: false };
   });
   writeAccountCache(next, true);

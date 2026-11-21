@@ -26,5 +26,5 @@ export function mergeUsageResult(previous: UsageInfo | undefined, incoming: Usag
   }
   if (!incoming.error) return { ...incoming, from_cache: incoming.from_cache ?? false, recorded_at: incoming.recorded_at ?? new Date().toISOString() };
   if (!previous || previous.account_id !== incoming.account_id) return incoming;
-  return { ...previous, error: incoming.error };
+  return { ...previous, from_cache: true, error: incoming.error };
 }

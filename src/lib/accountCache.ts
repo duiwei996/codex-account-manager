@@ -1,9 +1,8 @@
-import type { AccountWithUsage, AccountUsageStats, UsageInfo, AccountResetCredits } from "../types";
+import type { AccountWithUsage, UsageInfo, AccountResetCredits } from "../types";
 import { withUsagePlan } from "./usageDisplay.ts";
 import { isUsageRefreshPaused, USAGE_BASED_ERROR } from "./accountPlan.ts";
 
 export const ACCOUNT_CACHE_KEY = "codex-switcher-account-display-cache-v1";
-export const STATS_CACHE_KEY = "codex-switcher-account-stats-cache-v1";
 export const RESET_CACHE_KEY = "codex-switcher-account-reset-cache-v1";
 export const ACCOUNT_QUOTA_CHANGED_EVENT = "account-quota-cache-changed";
 export const RESET_CACHE_CHANGED_EVENT = "account-reset-cache-changed";
@@ -95,36 +94,4 @@ export function writeResetCreditsCache(accountId: string, data: AccountResetCred
   entries[accountId] = entry;
   write(RESET_CACHE_KEY,entries);
   window.dispatchEvent(new Event(RESET_CACHE_CHANGED_EVENT));
-}
-
-function cleanStats(value: unknown, accountId: string): AccountUsageStats | null {
-  if (!object(value) || value.account_id !== accountId || value.available !== true || !object(value.summary) || !object(value.activity)) return null;
-  const summary = value.summary;
-  const activity = value.activity;
-  return {
-    account_id: accountId, available: true, from_cache: true, error: null,
-    source: string(value.source) ?? "", generated_at: date(value.generated_at) ?? null, stats_as_of: string(value.stats_as_of),
-    summary: { lifetime_tokens: number(summary.lifetime_tokens), peak_daily_tokens: number(summary.peak_daily_tokens), longest_task_seconds: number(summary.longest_task_seconds), current_streak_days: number(summary.current_streak_days), longest_streak_days: number(summary.longest_streak_days) },
-    activity: { fast_mode_percent: number(activity.fast_mode_percent), reasoning_effort: string(activity.reasoning_effort), reasoning_effort_percent: number(activity.reasoning_effort_percent), skills_explored: number(activity.skills_explored), total_skills_used: number(activity.total_skills_used), total_threads: number(activity.total_threads) },
-    daily: Array.isArray(value.daily) ? value.daily.filter(object).slice(0, 366).map(row => ({ date: string(row.date) ?? "", tokens: number(row.tokens) ?? 0 })) : [],
-    top_invocations: Array.isArray(value.top_invocations) ? value.top_invocations.filter(object).slice(0, 100).map(row => ({ kind: string(row.kind) ?? "", display_name: string(row.display_name) ?? "", usage_count: number(row.usage_count) ?? 0, plugin_id: string(row.plugin_id), plugin_name: string(row.plugin_name), skill_id: string(row.skill_id), skill_name: string(row.skill_name) })) : [],
-    reset_credits: null,
-  };
-}
-export function readStatsCache(accountId: string): AccountUsageStats | null {
-  const value = read(STATS_CACHE_KEY);
-  return object(value) ? cleanStats(value[accountId], accountId) : null;
-}
-export function writeStatsCache(stats: AccountUsageStats): void {
-  if (!stats.available || stats.error) return;
-  if (stats.reset_credits && !stats.from_cache) writeResetCreditsCache(stats.account_id,stats.reset_credits,stats.reset_credits_recorded_at ?? new Date().toISOString());
-  const entry = cleanStats(stats, stats.account_id);
-  if (!entry) return;
-  const current = read(STATS_CACHE_KEY);
-  const entries: Record<string, unknown> = {};
-  if (object(current)) {
-    for (const id of Object.keys(current).slice(-199)) { const old = cleanStats(current[id], id); if (old) entries[id] = old; }
-  }
-  entries[stats.account_id] = entry;
-  write(STATS_CACHE_KEY, entries);
 }

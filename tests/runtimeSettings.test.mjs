@@ -38,7 +38,7 @@ window.__TAURI_INTERNALS__ = {
       case "list_accounts": return accounts.map(a => ({ ...a }));
       case "get_usage": if (failUsage) throw new Error("401 Unauthorized"); if (customUsage) return customUsage(args.accountId); return { account_id: args.accountId, primary_used_percent: 25, secondary_used_percent: 50, error: null };
       case "warmup_account": await new Promise(resolve => setTimeout(resolve, 20)); return null;
-      case "get_account_usage_stats": throw new Error("401 Unauthorized");
+      case "get_account_reset_credits": throw new Error("401 Unauthorized");
       case "refresh_account_metadata": return customMetadata ? customMetadata(args.accountId) : accounts.find(a => a.id === args.accountId);
       case "switch_account": accounts = accounts.map(a => ({ ...a, is_active: a.id === args.accountId })); return null;
       case "rename_account": accounts = accounts.map(a => a.id === args.accountId ? { ...a, name: args.newName } : a); return null;
@@ -55,10 +55,9 @@ window.__TAURI_INTERNALS__ = {
 };
 const server = await createServer({ configFile: false, plugins: [react()], server: { middlewareMode: true, hmr: false, watch: null }, optimizeDeps: { noDiscovery: true, include: [] }, appType: "custom" });
 const { createRoot } = await import("react-dom/client");
-const { AccountUsageStats } = await server.ssrLoadModule("/src/components/AccountUsageStats.tsx");
 const { getDueAutoWarmupWindow } = await server.ssrLoadModule("/src/lib/autoWarmupPolicy.ts");
 const { TimedWarmupEditor } = await server.ssrLoadModule("/src/components/TimedWarmupEditor.tsx");
-const { readAccountCache, writeAccountCache, readStatsCache, writeStatsCache } = await server.ssrLoadModule("/src/lib/accountCache.ts");
+const { readAccountCache, writeAccountCache } = await server.ssrLoadModule("/src/lib/accountCache.ts");
 const { SettingsModal } = await server.ssrLoadModule("/src/components/SettingsModal.tsx");
 const { AccountTransferModal } = await server.ssrLoadModule("/src/components/AccountTransferModal.tsx");
 const { useRuntimePreferences } = await server.ssrLoadModule("/src/hooks/useRuntimePreferences.ts");
@@ -273,23 +272,6 @@ test("display cache whitelists fields and restores values through expired author
   accounts = [account('first', true)];
   await act(async () => controller.loadAccounts(true));
   assert.deepEqual(readAccountCache().map(a => a.id), ['first']);
-  const stats = { account_id: 'first', available: true, error: null, summary: { lifetime_tokens: 1234 }, activity: { total_threads: 12 }, daily: [], top_invocations: [], reset_credits: { remaining: 5 }, token: 'secret' };
-  writeStatsCache(stats);
-  assert.equal(readStatsCache('first').summary.lifetime_tokens, 1234);
-  assert.equal(readStatsCache('first').reset_credits, null);
-  assert.equal(readStatsCache('second'), null);
-  writeStatsCache({ ...stats, available: false, error: '401' });
-  assert.equal(readStatsCache('first').summary.lifetime_tokens, 1234);
-  assert.ok(!localStorage.getItem('codex-switcher-account-stats-cache-v1').includes('secret'));
-});
-
-
-test("statistics dialog keeps cached values when authorization expires", async () => {
-  await act(async () => root.render(createElement(AccountUsageStats, { accountId: 'first', accountName: 'first', enabled: true, open: true, onClose() {} })));
-  assert.match(document.body.textContent, /1.2K/);
-  await settle();
-  assert.match(document.body.textContent, /1.2K/);
-  assert.equal(document.querySelectorAll('.animate-pulse').length, 0);
 });
 
 test("concurrent warmups for one account issue only one backend request", async () => {
@@ -539,6 +521,11 @@ test("converted team seats preserve cached quota across reload, skip automatic r
     const { selectRefreshAccounts } = await server.ssrLoadModule("/src/lib/refreshPolicy.ts");
     assert.equal(selectRefreshAccounts(controller.accounts, "current").length, 1);
     const { UsageBar } = await server.ssrLoadModule("/src/components/UsageBar.tsx");
+    const cachedUsage = { ...controller.accounts[0].usage, recorded_at: stamp, from_cache: true,
+      error: "Team pay-as-you-go: usage refresh failed; automatic refresh paused" };
+    await act(async () => root.render(createElement(UsageBar, { usage: cachedUsage, refreshPaused: true })));
+    assert.match(document.querySelector('[role="status"]').textContent, /^显示上次成功获取的额度 · 记录时间:/);
+    assert.doesNotMatch(document.body.textContent, /暂停自动刷新|额度刷新失败/);
     await act(async () => root.render(createElement(UsageBar, { refreshPaused: true })));
     assert.match(document.body.textContent, /暂无有效额度缓存/);
   } finally {

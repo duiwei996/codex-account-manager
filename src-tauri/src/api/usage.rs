@@ -105,23 +105,53 @@ pub async fn get_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
     }
     let _slot = USAGE_SLOTS.acquire().await?;
     let result = fetch_account_usage(account).await;
-    let error = match &result {
-        Ok(usage) => usage.error.clone(),
-        Err(error) => Some(error.to_string()),
+    let usage = match result {
+        Ok(usage) if is_usage_refresh_paused(usage.plan_type.as_deref()) => usage,
+        Ok(usage)
+            if !matches!(account.auth_data, AuthData::ChatGPT { .. }) || usable_quota(&usage) =>
+        {
+            usage
+        }
+        incomplete => {
+            let current = crate::auth::get_account(&account.id)?.context("Account not found")?;
+            if let Some(usage) = check_pay_as_you_go(&current).await {
+                usage
+            } else if is_usage_refresh_paused(current.plan_type.as_deref())
+                && incomplete.as_ref().is_ok_and(|usage| usage.error.is_none())
+            {
+                pay_as_you_go_usage(&account.id)
+            } else {
+                incomplete?
+            }
+        }
     };
-    if let Some(error) = error {
-        crate::auth::storage::mark_credentials_invalid(account, &error)?;
-    }
-    let usage = result?;
-    if is_usage_refresh_paused(usage.plan_type.as_deref())
-        || (usage.error.is_none()
-            && usage.plan_type.is_some()
-            && is_usage_refresh_paused(account.plan_type.as_deref()))
-    {
+    if is_usage_refresh_paused(usage.plan_type.as_deref()) {
+        crate::auth::storage::observe_quota_plan(&account.id, usage.plan_type.clone(), false)?;
+    } else if is_usage_refresh_paused(account.plan_type.as_deref()) && usable_quota(&usage) {
         crate::auth::storage::observe_quota_plan(&account.id, usage.plan_type.clone(), true)?;
     }
     *cached = Some((std::time::Instant::now(), fingerprint, usage.clone()));
     Ok(usage)
+}
+
+fn usable_quota(usage: &UsageInfo) -> bool {
+    usage.error.is_none()
+        && usage
+            .plan_type
+            .as_deref()
+            .is_some_and(|plan| !plan.trim().is_empty())
+        && (usage.primary_used_percent.is_some() || usage.secondary_used_percent.is_some())
+}
+
+fn pay_as_you_go_usage(account_id: &str) -> UsageInfo {
+    let mut usage = UsageInfo::error(account_id.to_string(), USAGE_BASED_ERROR.to_string());
+    usage.plan_type = Some(USAGE_BASED_PLAN.to_string());
+    usage
+}
+
+pub(crate) async fn check_pay_as_you_go(account: &StoredAccount) -> Option<UsageInfo> {
+    let metadata = fetch_chatgpt_account_metadata(account).await.ok()?;
+    is_usage_refresh_paused(metadata.plan_type.as_deref()).then(|| pay_as_you_go_usage(&account.id))
 }
 async fn fetch_account_usage(account: &StoredAccount) -> Result<UsageInfo> {
     match &account.auth_data {
@@ -212,11 +242,15 @@ async fn get_usage_with_chatgpt_auth(account: &StoredAccount) -> Result<UsageInf
     let (access_token, chatgpt_account_id) = extract_chatgpt_auth(&fresh_account)?;
 
     let response = send_chatgpt_usage_request(access_token, chatgpt_account_id).await?;
+    let status = response.status();
+    let usage = parse_usage_response(&fresh_account.id, response).await?;
 
-    // 401 means the token is genuinely expired — refresh and retry once.
-    // 403 is a Cloudflare challenge or permissions error; refreshing the token
-    // would burn the refresh token unnecessarily (refresh_token_reused error).
-    if response.status() == StatusCode::UNAUTHORIZED {
+    // A quota 401 can mean expired access or workspace-specific restrictions.
+    // Check the workspace before rotating credentials and retrying once.
+    if status == StatusCode::UNAUTHORIZED && !is_usage_refresh_paused(usage.plan_type.as_deref()) {
+        if let Some(usage) = check_pay_as_you_go(&fresh_account).await {
+            return Ok(usage);
+        }
         println!(
             "[Usage] Unauthorized for account {}, refreshing token and retrying once",
             "authenticated account"
@@ -224,28 +258,21 @@ async fn get_usage_with_chatgpt_auth(account: &StoredAccount) -> Result<UsageInf
         let refreshed_account = refresh_chatgpt_tokens(&fresh_account).await?;
         let (retry_token, retry_account_id) = extract_chatgpt_auth(&refreshed_account)?;
         let retry_response = send_chatgpt_usage_request(retry_token, retry_account_id).await?;
-        if retry_response.status() == StatusCode::UNAUTHORIZED {
-            crate::auth::storage::mark_credentials_invalid(&refreshed_account, "401 Unauthorized")?;
-        }
-        return parse_usage_response(
-            &refreshed_account.id,
-            &refreshed_account.name,
-            retry_response,
-        )
-        .await;
+        return parse_usage_response(&refreshed_account.id, retry_response).await;
     }
 
-    parse_usage_response(&fresh_account.id, &fresh_account.name, response).await
+    Ok(usage)
 }
 
-async fn parse_usage_response(
-    account_id: &str,
-    account_name: &str,
-    response: reqwest::Response,
-) -> Result<UsageInfo> {
+async fn parse_usage_response(account_id: &str, response: reqwest::Response) -> Result<UsageInfo> {
     let status = response.status();
 
     if !status.is_success() {
+        if let Ok(payload) = crate::api::http::json::<AccountsCheckAccount>(response).await {
+            if is_usage_refresh_paused(payload.plan_type.as_deref()) {
+                return Ok(pay_as_you_go_usage(account_id));
+            }
+        }
         return Ok(UsageInfo::error(
             account_id.to_string(),
             format!("API error: {status}"),
@@ -253,10 +280,7 @@ async fn parse_usage_response(
     }
 
     let payload: RateLimitStatusPayload = crate::api::http::json(response).await?;
-    let usage = convert_payload_to_usage_info(account_id, payload);
-    let _ = account_name;
-
-    Ok(usage)
+    Ok(convert_payload_to_usage_info(account_id, payload))
 }
 
 async fn warmup_with_chatgpt_auth(account: &StoredAccount) -> Result<()> {
@@ -454,9 +478,7 @@ async fn send_chatgpt_warmup_request(
 
 fn convert_payload_to_usage_info(account_id: &str, payload: RateLimitStatusPayload) -> UsageInfo {
     if is_usage_refresh_paused(Some(&payload.plan_type)) {
-        let mut usage = UsageInfo::error(account_id.to_string(), USAGE_BASED_ERROR.to_string());
-        usage.plan_type = Some(USAGE_BASED_PLAN.to_string());
-        return usage;
+        return pay_as_you_go_usage(account_id);
     }
     let (primary, secondary) = extract_rate_limits(payload.rate_limit);
     let credits = extract_credits(payload.credits);
@@ -522,7 +544,7 @@ pub async fn refresh_all_usage(accounts: &[StoredAccount]) -> Vec<UsageInfo> {
     let concurrency = accounts.len().min(10).max(1);
     let accounts: Vec<_> = accounts
         .iter()
-        .filter(|a| !a.risk_controlled)
+        .filter(|a| !a.risk_controlled && !a.is_unavailable())
         .cloned()
         .collect();
     let results: Vec<UsageInfo> = stream::iter(accounts)

@@ -248,7 +248,7 @@ fn build_menu<R: Runtime>(app: &AppHandle<R>, store: &AccountsStore) -> tauri::R
     let accounts: Vec<_> = store
         .accounts
         .iter()
-        .filter(|a| !a.risk_controlled && !a.credentials_invalid && settings.includes_category(a))
+        .filter(|a| !a.risk_controlled && !a.is_unavailable() && settings.includes_category(a))
         .collect();
     if accounts.is_empty() {
         menu.append(

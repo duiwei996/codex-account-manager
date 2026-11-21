@@ -1,7 +1,7 @@
 //! Tauri commands module
 
 pub mod account;
-pub mod account_stats;
+pub mod account_reset_credits;
 pub mod account_transfer;
 pub mod oauth;
 pub mod preferences;
@@ -12,7 +12,7 @@ pub(crate) mod webdav_cache;
 pub mod window;
 
 pub use account::*;
-pub use account_stats::*;
+pub use account_reset_credits::*;
 pub use account_transfer::*;
 pub use oauth::*;
 pub use preferences::*;

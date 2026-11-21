@@ -7,7 +7,7 @@ import { selectRefreshAccounts } from "./lib/refreshPolicy";
 import { ActionIcon } from "./components/ActionIcon";
 import { localizeError } from "./lib/errors";
 import { AccountTransferModal } from "./components/AccountTransferModal";
-import { isLimitFull, getPreferredUsedPercent, getPreferredResetsAt, getTimedWarmupTargets, matchesAccountSearch } from "./lib/accountDisplay";
+import { isLimitFull, getPreferredUsedPercent, getWeeklyResetsAt, getTimedWarmupTargets, matchesAccountSearch } from "./lib/accountDisplay";
 import { getLocale, tr, useLocale } from "./lib/i18n";
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useAccounts } from "./hooks/useAccounts";
@@ -555,7 +555,7 @@ function App() {
     setIsRefreshing(true);
     setRefreshSuccess(false);
     try {
-      const targets = selectRefreshAccounts(accountsRef.current, "category", selectedPlanTabRef.current, true);
+      const targets = selectRefreshAccounts(accountsRef.current, "category", selectedPlanTabRef.current);
       const results = await refreshUsage(targets, { refreshMetadata: true });
       const failures = results?.filter(usage => usage.error).length ?? 0;
       if (failures) {showWarmupToast(msg(`${failures} accounts could not refresh. Check the account messages.`, `${failures} 个账号刷新失败，请查看账号卡片中的提示。`), true);return;}
@@ -1008,9 +1008,6 @@ function App() {
 
   const hasRunningProcesses = processInfo && processInfo.count > 0;
   const sortedAccounts = useMemo(() => {
-    const getResetDeadline = (resetAt: number | null | undefined) =>
-      resetAt ?? Number.POSITIVE_INFINITY;
-
     const getSubscriptionDeadline = (expiresAt: string | null | undefined) => {
       if (!expiresAt) return null;
       const timestamp = new Date(expiresAt).getTime();
@@ -1028,11 +1025,9 @@ function App() {
       return direction === "asc" ? aValue - bValue : bValue - aValue;
     };
 
-    const getRemainingPercent = (usedPercent: number | null | undefined) => {
-      if (usedPercent === null || usedPercent === undefined) {
-        return Number.NEGATIVE_INFINITY;
-      }
-      return Math.max(0, 100 - usedPercent);
+    const getRemainingPercent = (usage: UsageInfo | undefined) => {
+      const used = getPreferredUsedPercent(usage);
+      return used == null ? null : Math.max(0, 100 - used);
     };
 
     return [...accounts].sort((a, b) => {
@@ -1051,45 +1046,32 @@ function App() {
         );
         if (subscriptionDiff !== 0) return subscriptionDiff;
 
-        const deadlineDiff =
-          getResetDeadline(getPreferredResetsAt(a.usage)) -
-          getResetDeadline(getPreferredResetsAt(b.usage));
+        const deadlineDiff = compareOptionalNumber(getWeeklyResetsAt(a.usage), getWeeklyResetsAt(b.usage), "asc");
         if (deadlineDiff !== 0) return deadlineDiff;
 
-        const remainingDiff =
-          getRemainingPercent(getPreferredUsedPercent(b.usage)) -
-          getRemainingPercent(getPreferredUsedPercent(a.usage));
+        const remainingDiff = compareOptionalNumber(getRemainingPercent(a.usage), getRemainingPercent(b.usage), "desc");
         if (remainingDiff !== 0) return remainingDiff;
 
         return a.name.localeCompare(b.name);
       }
 
       if (otherAccountsSort === "deadline_asc" || otherAccountsSort === "deadline_desc") {
-        const deadlineDiff =
-          getResetDeadline(getPreferredResetsAt(a.usage)) -
-          getResetDeadline(getPreferredResetsAt(b.usage));
-        if (deadlineDiff !== 0) {
-          return otherAccountsSort === "deadline_asc" ? deadlineDiff : -deadlineDiff;
-        }
-        const remainingDiff =
-          getRemainingPercent(getPreferredUsedPercent(b.usage)) -
-          getRemainingPercent(getPreferredUsedPercent(a.usage));
+        const deadlineDiff = compareOptionalNumber(
+          getWeeklyResetsAt(a.usage), getWeeklyResetsAt(b.usage),
+          otherAccountsSort === "deadline_asc" ? "asc" : "desc"
+        );
+        if (deadlineDiff !== 0) return deadlineDiff;
+        const remainingDiff = compareOptionalNumber(getRemainingPercent(a.usage), getRemainingPercent(b.usage), "desc");
         if (remainingDiff !== 0) return remainingDiff;
         return a.name.localeCompare(b.name);
       }
 
-      const remainingDiff =
-        getRemainingPercent(getPreferredUsedPercent(b.usage)) -
-        getRemainingPercent(getPreferredUsedPercent(a.usage));
-      if (otherAccountsSort === "remaining_desc" && remainingDiff !== 0) {
-        return remainingDiff;
-      }
-      if (otherAccountsSort === "remaining_asc" && remainingDiff !== 0) {
-        return -remainingDiff;
-      }
-      const deadlineDiff =
-        getResetDeadline(getPreferredResetsAt(a.usage)) -
-        getResetDeadline(getPreferredResetsAt(b.usage));
+      const remainingDiff = compareOptionalNumber(
+        getRemainingPercent(a.usage), getRemainingPercent(b.usage),
+        otherAccountsSort === "remaining_asc" ? "asc" : "desc"
+      );
+      if (remainingDiff !== 0) return remainingDiff;
+      const deadlineDiff = compareOptionalNumber(getWeeklyResetsAt(a.usage), getWeeklyResetsAt(b.usage), "asc");
       if (deadlineDiff !== 0) return deadlineDiff;
       return a.name.localeCompare(b.name);
     });

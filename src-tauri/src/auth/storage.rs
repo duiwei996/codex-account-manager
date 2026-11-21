@@ -383,16 +383,18 @@ mod account_merge_tests {
     fn network_and_permissions_errors_do_not_disable_accounts() {
         for error in [
             "network timeout",
+            "API error: 401 Unauthorized",
             "API error: 403 Forbidden",
             "429 Too Many Requests",
             "Token refresh failed: 500",
+            "Token refresh failed: 401 Unauthorized",
+            "Token refresh failed: 400 Bad Request unrecognized_invalid_grant",
         ] {
             assert!(!is_terminal_auth_error(error));
         }
         for error in [
-            "API error: 401 Unauthorized",
-            "invalid_grant",
-            "refresh_token_reused",
+            "Token refresh failed: 400 Bad Request invalid_grant",
+            "Token refresh failed: 401 Unauthorized refresh_token_reused",
         ] {
             assert!(is_terminal_auth_error(error));
         }
@@ -712,7 +714,10 @@ pub fn update_account_chatgpt_tokens(
             account.email = Some(new_email);
         }
 
-        if let Some(new_plan_type) = plan_type {
+        if let Some(new_plan_type) = plan_type.filter(|plan| {
+            !crate::types::is_usage_refresh_paused(account.plan_type.as_deref())
+                || crate::types::is_usage_refresh_paused(Some(plan))
+        }) {
             account.plan_type = Some(new_plan_type);
         }
 
@@ -932,19 +937,18 @@ mod tests {
 
 /// Only terminal authentication errors disable an account until credentials are replaced.
 pub(crate) fn is_terminal_auth_error(message: &str) -> bool {
-    let value = message.to_lowercase();
-    [
-        "401",
-        "invalid_grant",
-        "refresh_token_reused",
-        "refresh_token_expired",
-        "refresh_token_invalidated",
-        "token_revoked",
-        "account_deactivated",
-        "account credentials invalid",
-    ]
-    .iter()
-    .any(|code| value.contains(code))
+    message.starts_with("Token refresh failed: ")
+        && matches!(
+            message.split_whitespace().last(),
+            Some(
+                "invalid_grant"
+                    | "refresh_token_reused"
+                    | "refresh_token_expired"
+                    | "refresh_token_invalidated"
+                    | "token_revoked"
+                    | "account_deactivated"
+            )
+        )
 }
 
 pub(crate) fn mark_credentials_invalid(account: &StoredAccount, message: &str) -> Result<()> {

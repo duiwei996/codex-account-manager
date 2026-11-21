@@ -109,8 +109,8 @@ async fn switch_account_with_policy(
         .iter()
         .find(|account| account.id == account_id)
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
-    if target.credentials_invalid {
-        return Err("Account credentials invalid; sign in again".into());
+    if let Some(error) = target.unavailable_error() {
+        return Err(error.into());
     }
 
     if !restart && store.active_account_id.as_deref() == Some(account_id) {
@@ -139,6 +139,10 @@ async fn switch_account_with_policy(
     let mut account = ensure_chatgpt_tokens_fresh_locked(target)
         .await
         .map_err(|e| e.to_string())?;
+
+    if let Some(error) = account.unavailable_error() {
+        return Err(error.into());
+    }
 
     // Keep the entire close -> credential transaction -> reopen sequence serialized.
     // Refresh the target credentials first so a failed refresh never closes the app.

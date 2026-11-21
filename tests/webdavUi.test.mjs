@@ -16,6 +16,7 @@ const completed = (overrides = {}) => ({ conflicts: [], bytes: 321, uploaded: tr
 let syncReply = completed();
 let listedAccounts = [];
 let configError = null;
+let resetCreditsById = {};
 window.__TAURI_INTERNALS__ = {
   async invoke(command, args = {}) {
     calls.push({ command, args });
@@ -27,6 +28,9 @@ window.__TAURI_INTERNALS__ = {
     if (command === "list_webdav_directories") return args.directory === "/" ? [{ name: "中文 & folder", path: "/中文 & folder/" }] : [];
     if (command === "sync_webdav") return typeof syncReply === "function" ? syncReply(args) : syncReply;
     if (command === "list_accounts") return listedAccounts;
+    if (command === "get_account_reset_credits" && args.accountId in resetCreditsById) {
+      return resetCreditsById[args.accountId];
+    }
     throw new Error(`Unexpected command ${command}`);
   },
 };
@@ -153,7 +157,6 @@ test("account cache payload includes only quota, expiry and reset-credit observa
   accountCache.writeAccountCache([{ ...account,usage:quota(account.id),access_token:"private-token" }]);
   accountCache.writeResetCreditsCache(account.id,{ ...resets([{id:"credit-1",expires_at:"2030-12-01T00:00:00Z",title:"Reset"}]),credits:[{id:"credit-1",status:"AVAILABLE",expires_at:"2030-12-01T00:00:00Z",title:"Reset"}] },"2026-10-19T10:00:00Z");
   assert.equal(accountCache.readResetCreditsCache(account.id).data.available_count,1);
-  accountCache.writeStatsCache({ account_id:account.id,available:true,error:null,summary:{ lifetime_tokens:12345 },activity:{ total_threads:42 },daily:[{date:"2026-10-19",tokens:123}],top_invocations:[{kind:"skill",display_name:"private-stat",usage_count:5}],reset_credits:resets([{id:"credit-1",expires_at:"2030-12-01T00:00:00Z",title:"Reset"}]),reset_credits_recorded_at:"2026-10-19T10:00:00Z" });
   const payload = quotaSync.collectAccountSyncCaches();
   assert.deepEqual(Object.keys(payload.source).sort(),["metadata","resets","usage"]);
   assert.equal(payload.source.usage.primary_used_percent,25);
@@ -165,7 +168,6 @@ test("account cache payload includes only quota, expiry and reset-credit observa
   assert.equal(accountCache.readAccountCache()[0].usage.account_id,"destination");
   assert.equal(accountCache.readAccountCache()[0].usage.from_cache,true);
   assert.equal(accountCache.readResetCreditsCache("destination").data.available_count,1);
-  assert.equal(accountCache.readStatsCache("destination"),null);
 });
 
 test("older cloud quotas and resets cannot overwrite a newer local query, including a zero result", async () => {
@@ -194,6 +196,41 @@ test("quota caches are applied only after confirmed sync, and refresh the saved 
   syncReply = { ...syncReply,needs_confirmation:false,synced_at:"2026-10-19T13:00:00Z" };
   await act(async () => service.runDavSync({ confirmation:"preview-v1" }));
   assert.equal(accountCache.readAccountCache()[0].usage.primary_used_percent,80);
+});
+
+test("account cards show fresh reset credits from the dedicated query and cache them for sync", async () => {
+  await act(async () => { root.render(null); localStorage.clear(); });
+  const account = cachedAccount("fresh-credits");
+  accountCache.writeAccountCache([account]);
+  resetCreditsById = { [account.id]: resets([{id:"credit",expires_at:null,title:"Reset"}]) };
+  try {
+    await act(async () => root.render(createElement(AccountCard,{ account,onSwitch(){},onWarmup:async()=>{},onDelete(){},onExport(){},onRefresh:async()=>{},onRename:async()=>{} })));
+    await settle();
+    assert.match(document.body.textContent,/1 次重置/);
+    assert.equal(quotaSync.collectAccountSyncCaches()[account.id].resets.credits[0].id,"credit");
+  } finally {
+    resetCreditsById = {};
+  }
+});
+
+test("pay-as-you-go team cards use the unavailable styling and actions while allowing a single refresh", async () => {
+  await act(async () => root.render(null));
+  const account = { ...cachedAccount("payg"), plan_type: "self_serve_business_usage_based", credentials_invalid: true };
+  account.usage = { ...quota(account.id), from_cache: true, error: "Team pay-as-you-go: usage refresh failed; automatic refresh paused" };
+  const refreshes = [];
+  await act(async () => root.render(createElement(AccountCard, { account, onSwitch(){}, onRelogin(){}, onWarmup:async()=>{}, onDelete(){}, onExport(){},
+    onRefresh:async()=>{ refreshes.push(account.id); }, onRename:async()=>{} })));
+  assert.ok(document.querySelector('[class~="border-red-500"]'));
+  assert.ok([...document.querySelectorAll('span')].some(span => span.textContent === 'team'));
+  assert.ok(document.querySelector('[class~="text-red-700"]').textContent.includes('团队按量付费'));
+  assert.doesNotMatch(document.body.textContent, /登录已失效|暂停自动刷新|额度刷新失败/);
+  assert.match(document.querySelector('[role="status"]').textContent, /^显示上次成功获取的额度 · 记录时间:/);
+  assert.ok(button("重新登录"));
+  assert.equal(document.querySelector('[aria-label="手动预热"]').disabled, true);
+  const refresh = document.querySelector('[aria-label="刷新用量"]');
+  assert.equal(refresh.disabled, false);
+  await act(async () => refresh.click());
+  assert.deepEqual(refreshes, [account.id]);
 });
 
 test("reset-credit cache survives offline querying and expiry reduces the visible count", async () => {
@@ -261,6 +298,24 @@ test("choosing cloud replaces newer local caches with the chosen copy", async ()
   assert.equal(accountCache.readAccountCache()[0].usage.primary_used_percent, 90);
   quotaSync.replaceAccountSyncCaches([account], {});
   assert.equal(accountCache.readAccountCache()[0].usage, undefined);
+});
+
+test("team pay-as-you-go quota survives cloud merge and download and can be uploaded again", () => {
+  const plan_type = "self_serve_business_usage_based";
+  const source = { ...cachedAccount("team-source"), plan_type };
+  const destination = { ...cachedAccount("team-destination"), plan_type };
+  accountCache.writeAccountCache([{ ...source, usage: quota(source.id, 35) }], true);
+  const uploaded = quotaSync.collectAccountSyncCaches()[source.id].usage;
+  assert.equal(uploaded.primary_used_percent, 35);
+  for (const apply of [quotaSync.applyAccountSyncCaches, quotaSync.replaceAccountSyncCaches]) {
+    accountCache.writeAccountCache([], true);
+    apply([destination], { [destination.id]: { usage: uploaded } });
+    const [restored] = accountCache.readAccountCache();
+    assert.equal(restored.plan_type, plan_type);
+    assert.equal(restored.usage.from_cache, true);
+    assert.equal(restored.usage.recorded_at, uploaded.recorded_at);
+    assert.deepEqual(quotaSync.collectAccountSyncCaches()[destination.id].usage, uploaded);
+  }
 });
 
 

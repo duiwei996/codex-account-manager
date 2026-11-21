@@ -8,9 +8,16 @@ import type {
 import { invokeBackend, isTauriRuntime, type FileSource } from "../lib/platform";
 import { ACCOUNT_QUOTA_CHANGED_EVENT, mergeAccountQuota, readAccountCache, writeAccountCache } from "../lib/accountCache";
 import { mergeUsageResult, withUsagePlan } from "../lib/usageDisplay";
-import { isUsageRefreshPaused, USAGE_BASED_ERROR, USAGE_BASED_PLAN } from "../lib/accountPlan";
+import { isAccountUnavailable, isUsageRefreshPaused, USAGE_BASED_ERROR, USAGE_BASED_PLAN } from "../lib/accountPlan";
 import { refreshDelay, selectRefreshAccounts } from "../lib/refreshPolicy";
 import type { RuntimePreferences } from "./useRuntimePreferences";
+
+function applyUsageResult(account: AccountWithUsage, usage: UsageInfo, mayResume: boolean): AccountWithUsage {
+  const next = { ...account, usageLoading: false };
+  // Metadata can identify a conversion while a request made under the old plan is still running.
+  if (!mayResume && isUsageRefreshPaused(account.plan_type) && !isUsageRefreshPaused(usage.plan_type)) return next;
+  return withUsagePlan({ ...next, usage: mergeUsageResult(account.usage, usage) }, usage);
+}
 
 export function useAccounts(preferences: RuntimePreferences, preferencesReady: boolean) {
   const [accounts, setAccounts] = useState<AccountWithUsage[]>(readAccountCache);
@@ -122,7 +129,7 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
     async (
       accountList?: AccountInfo[] | AccountWithUsage[]
     ) => {
-      const list = (accountList ?? accountsRef.current).filter(account => !account.risk_controlled && !account.credentials_invalid && !isUsageRefreshPaused(account.plan_type));
+      const list = (accountList ?? accountsRef.current).filter(account => !account.risk_controlled && !isAccountUnavailable(account));
       const dueAccounts = list.filter(
         (account) => !metadataRefreshInFlightRef.current.has(account.id)
       );
@@ -175,7 +182,7 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
       options?: { refreshMetadata?: boolean }
     ) => {
       try {
-        const list = (accountList ?? accountsRef.current).filter(account => !account.risk_controlled && !account.credentials_invalid);
+        const list = (accountList ?? accountsRef.current).filter(account => !account.risk_controlled && !isAccountUnavailable(account));
         if (list.length === 0) {
           return;
         }
@@ -186,13 +193,12 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
           ? refreshMetadata(list)
           : Promise.resolve();
 
-        const accountIds = list.map((account) => account.id);
-        const accountIdSet = new Set(accountIds);
+        const requestedPlans = new Map(list.map(account => [account.id, account.plan_type]));
         const usageResults = new Map<string, UsageInfo>();
 
         setAccounts((prev) =>
           prev.map((account) =>
-            accountIdSet.has(account.id)
+            requestedPlans.has(account.id)
               ? { ...account, usageLoading: true }
               : account
           )
@@ -209,7 +215,7 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
               const message = err instanceof Error ? err.message : String(err);
               usageResults.set(
                 account.id,
-                buildUsageError(account.id, message, account.plan_type ?? null)
+                  buildUsageError(account.id, message, null)
               );
             }
           },
@@ -220,11 +226,7 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
           prev.map((account) => {
             const usage = usageResults.get(account.id);
             if (!usage) return account;
-            return withUsagePlan({
-              ...account,
-              usage: mergeUsageResult(account.usage, usage),
-              usageLoading: false,
-            }, usage);
+            return applyUsageResult(account, usage, isUsageRefreshPaused(requestedPlans.get(account.id)));
           })
         );
 
@@ -268,7 +270,7 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
       const usage = await requestUsage(accountId, options?.manual === true);
       setAccounts((prev) =>
         prev.map((a) =>
-          a.id === accountId ? withUsagePlan({ ...a, usage: mergeUsageResult(a.usage, usage), usageLoading: false }, usage) : a
+          a.id === accountId ? applyUsageResult(a, usage, isUsageRefreshPaused(account?.plan_type)) : a
         )
       );
       reportUsageToTray([usage]);
@@ -286,7 +288,7 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
           a.id === accountId
             ? {
                 ...a,
-                usage: mergeUsageResult(a.usage, buildUsageError(accountId, message, a.plan_type ?? null)),
+                usage: mergeUsageResult(a.usage, buildUsageError(accountId, message, null)),
                 usageLoading: false,
               }
             : a
@@ -493,7 +495,8 @@ export function useAccounts(preferences: RuntimePreferences, preferencesReady: b
       const unlisten = await listen<UsageInfo[]>("background-usage-updated", ({ payload }) => {
         setAccounts(previous => previous.map(account => {
           const usage = payload.find(usage => usage.account_id === account.id);
-          return usage ? withUsagePlan({ ...account, usage: mergeUsageResult(account.usage, usage) }, usage) : account;
+          if (!usage || (isUsageRefreshPaused(account.plan_type) && !isUsageRefreshPaused(usage.plan_type))) return account;
+          return withUsagePlan({ ...account, usage: mergeUsageResult(account.usage, usage) }, usage);
         }));
       });
       if (disposed) unlisten(); else stop = unlisten;

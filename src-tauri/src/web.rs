@@ -2,7 +2,7 @@ use std::path::{Component, Path, PathBuf};
 
 use crate::commands::{
     add_account_from_auth_json_text, delete_account, fetch_usage_with_retry,
-    get_account_usage_stats, get_active_account_info, get_masked_account_ids, list_accounts,
+    get_account_reset_credits, get_active_account_info, get_masked_account_ids, list_accounts,
     refresh_account_metadata, refresh_all_accounts_usage, rename_account, set_masked_account_ids,
     switch_account,
 };
@@ -242,7 +242,7 @@ fn web_command_allowed(command: &str, allow_writes: bool) -> bool {
         "list_accounts"
             | "get_active_account_info"
             | "get_usage"
-            | "get_account_usage_stats"
+            | "get_account_reset_credits"
             | "refresh_account_metadata"
             | "refresh_all_accounts_usage"
             | "get_masked_account_ids"
@@ -285,9 +285,9 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
             let args: UsageArgs = parse_args(payload)?;
             to_json(fetch_usage_with_retry(&args.account_id, args.retry_invalid).await?)
         }
-        "get_account_usage_stats" => {
+        "get_account_reset_credits" => {
             let args: AccountIdArgs = parse_args(payload)?;
-            to_json(get_account_usage_stats(args.account_id).await?)
+            to_json(get_account_reset_credits(args.account_id).await?)
         }
         "refresh_account_metadata" => {
             let args: AccountIdArgs = parse_args(payload)?;

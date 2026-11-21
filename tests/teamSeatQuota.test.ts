@@ -19,7 +19,7 @@ test("converted seats retain quota and timestamp, pause automatic refresh, and r
   assert.deepEqual(stale, { ...previous, error: USAGE_BASED_ERROR, from_cache: true });
   const paused = withUsagePlan({ ...account, usage: stale }, converted);
   assert.equal(paused.credentials_invalid, undefined);
-  assert.equal(selectRefreshAccounts([paused], "category", "team", true).length, 1);
+  assert.deepEqual(selectRefreshAccounts([paused], "category", "team"), []);
   for (const scope of ["current", "category"] as const) {
     for (const tab of ["all", "team", "plus"]) assert.deepEqual(selectRefreshAccounts([paused], scope, tab), []);
   }
@@ -41,7 +41,7 @@ test("converted results without a valid prior cache never become zero or fresh q
     assert.equal(result.recorded_at, undefined);
     assert.equal(result.error, USAGE_BASED_ERROR);
   }
-  assert.match(localizeError(USAGE_BASED_ERROR, "zh-CN"), /团队按量付费.*刷新失败.*暂停自动刷新/);
+  assert.equal(localizeError(USAGE_BASED_ERROR, "zh-CN"), "团队按量付费");
   assert.match(localizeError(USAGE_BASED_ERROR, "en-US"), /Team pay-as-you-go/);
 });
 

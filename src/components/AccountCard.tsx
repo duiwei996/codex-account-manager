@@ -1,11 +1,10 @@
-import { isUsageRefreshPaused, normalizeAccountPlan } from "../lib/accountPlan.ts";
-import { RESET_CACHE_CHANGED_EVENT, readResetCreditsCache, readStatsCache, writeStatsCache } from "../lib/accountCache";
+import { isAccountUnavailable, isUsageRefreshPaused, normalizeAccountPlan } from "../lib/accountPlan.ts";
+import { RESET_CACHE_CHANGED_EVENT, readResetCreditsCache, writeResetCreditsCache } from "../lib/accountCache";
 import { ActionIcon } from "./ActionIcon";
 import { getLocale, tr, useLocale } from "../lib/i18n";
 import { useCallback, useState, useRef, useEffect } from "react";
-import type { AccountResetCredits, AccountUsageStats as AccountUsageStatsInfo, AccountWithUsage } from "../types";
+import type { AccountResetCredits, AccountWithUsage } from "../types";
 import { invokeBackend } from "../lib/platform";
-import { AccountUsageStats, formatTokens } from "./AccountUsageStats";
 import { ResetCreditsMenu } from "./ResetCreditsMenu";
 import { UsageBar } from "./UsageBar";
 
@@ -137,9 +136,6 @@ export function AccountCard({
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(account.name);
   const [resetCredits, setResetCredits] = useState<AccountResetCredits | null>(() => account.auth_mode === "chat_g_p_t" ? readResetCreditsCache(account.id)?.data ?? null : null);
-  const [statsOpen, setStatsOpen] = useState(false);
-  const closeStats = useCallback(() => setStatsOpen(false), []);
-  const [usageStats, setUsageStats] = useState<AccountUsageStatsInfo | null>(() => readStatsCache(account.id));
   const inputRef = useRef<HTMLInputElement>(null);
   const resetRequestSeq = useRef(0);
 
@@ -189,6 +185,8 @@ export function AccountCard({
     }
   };
 
+  const payAsYouGo = isUsageRefreshPaused(account.plan_type);
+  const unavailable = isAccountUnavailable(account);
   const planDisplay = account.auth_mode === "api_key" ? "API Key" : account.plan_type ? normalizeAccountPlan(account.plan_type) : t("Unknown");
 
   const planColors: Record<string, string> = {
@@ -216,31 +214,20 @@ export function AccountCard({
     }
 
     try {
-      const stats = await invokeBackend<AccountUsageStatsInfo>("get_account_usage_stats", {
+      const credits = await invokeBackend<AccountResetCredits>("get_account_reset_credits", {
         accountId: account.id,
       });
       if (requestId !== resetRequestSeq.current) return;
-      if (stats.account_id === account.id && stats.available && !stats.error) { writeStatsCache(stats); setUsageStats({ ...stats, from_cache: false }); }
-      if (stats.account_id === account.id) setResetCredits(readResetCreditsCache(account.id)?.data ?? null);
+      writeResetCreditsCache(account.id, credits);
+      setResetCredits(readResetCreditsCache(account.id)?.data ?? null);
     } catch {
       if (requestId !== resetRequestSeq.current) return;
       setResetCredits(readResetCreditsCache(account.id)?.data ?? null);
     }
   }, [account.auth_mode, account.id, account.credentials_invalid, account.risk_controlled, account.plan_type]);
 
-  const handleStatsLoaded = useCallback(
-    (stats: AccountUsageStatsInfo | null) => {
-      if (!stats || stats.account_id !== account.id) return;
-      if (stats.available && !stats.error) { writeStatsCache(stats); setUsageStats({ ...stats, from_cache: false }); }
-      setResetCredits(readResetCreditsCache(account.id)?.data ?? null);
-    },
-    [account.id]
-  );
-
   useEffect(() => {
     setResetCredits(account.auth_mode === "chat_g_p_t" ? readResetCreditsCache(account.id)?.data ?? null : null);
-    setUsageStats(readStatsCache(account.id));
-    setStatsOpen(false);
 
     void loadResetCredits();
     const timer = window.setInterval(() => {
@@ -263,7 +250,7 @@ export function AccountCard({
   return (
     <div
       className={`relative rounded-2xl border p-6 transition-all duration-200 ${
-        account.credentials_invalid
+        unavailable
           ? "bg-red-50/40 dark:bg-red-950/10 border-red-500 dark:border-red-400 ring-2 ring-red-100 dark:ring-red-900/30"
           : account.is_active
           ? "bg-white dark:bg-gray-900 border-blue-400 shadow-sm ring-2 ring-blue-50 dark:ring-blue-900/20"
@@ -277,11 +264,8 @@ export function AccountCard({
             {account.is_active && (
               <span className="shrink-0 rounded-md bg-blue-50 px-1.5 py-0.5 text-xs font-medium text-blue-600 dark:bg-blue-950 dark:text-blue-300">{t("Current")}</span>
             )}
-            {account.credentials_invalid && (
-              <span className="shrink-0 rounded-md bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">{t("Login expired")}</span>
-            )}
-            {isUsageRefreshPaused(account.plan_type) && (
-              <span className="shrink-0 rounded-md bg-amber-50 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">{t("Automatic refresh paused")}</span>
+            {unavailable && (
+              <span className="shrink-0 rounded-md bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">{t(payAsYouGo ? "Team pay-as-you-go" : "Login expired")}</span>
             )}
             {isEditing ? (
               <input
@@ -345,24 +329,11 @@ export function AccountCard({
         </div>
       </div>
 
-      <div className={`mb-4 grid grid-cols-1 gap-4 ${account.is_active ? "sm:grid-cols-2" : ""}`}>
-        <section className="min-w-0 rounded-xl bg-gray-50 p-3 dark:bg-gray-950/40">
-          <h4 className="mb-3 text-xs font-medium text-gray-500 dark:text-gray-400">{locale === "zh-CN" ? "账号额度" : "Allowance"}</h4>
-          <UsageBar usage={account.usage} loading={isRefreshing || account.usageLoading} refreshPaused={isUsageRefreshPaused(account.plan_type)} />
-          {account.credentials_invalid && account.usage && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">{t("Cached usage")}</p>}
-          {account.usage?.error && <button onClick={() => void handleRefresh().catch(() => {})} disabled={isRefreshing || account.usageLoading} className="mt-2 text-xs font-medium text-blue-600 hover:underline disabled:opacity-50 dark:text-blue-400">{t("Retry")}</button>}
-        </section>
-        {account.is_active && (
-          <section className="min-w-0 rounded-xl bg-gray-50 p-3 dark:bg-gray-950/40">
-            <h4 className="mb-3 text-xs font-medium text-gray-500 dark:text-gray-400">{t("Usage statistics")}</h4>
-            <dl className="space-y-2 text-xs">
-              <div className="flex items-center justify-between gap-2"><dt className="text-gray-500">{t("Lifetime")}</dt><dd className="font-semibold tabular-nums">{formatTokens(usageStats?.summary.lifetime_tokens)}</dd></div>
-              <div className="flex items-center justify-between gap-2"><dt className="text-gray-500">{t("Peak day")}</dt><dd className="font-semibold tabular-nums">{formatTokens(usageStats?.summary.peak_daily_tokens)}</dd></div>
-              <div className="flex items-center justify-between gap-2"><dt className="text-gray-500">{t("Total threads")}</dt><dd className="font-semibold tabular-nums">{usageStats?.activity.total_threads?.toLocaleString(locale) ?? "--"}</dd></div>
-            </dl>
-          </section>
-        )}
-      </div>
+      <section className="mb-4 min-w-0 rounded-xl bg-gray-50 p-3 dark:bg-gray-950/40">
+        <h4 className="mb-3 text-xs font-medium text-gray-500 dark:text-gray-400">{locale === "zh-CN" ? "账号额度" : "Allowance"}</h4>
+        <UsageBar usage={account.usage} loading={isRefreshing || account.usageLoading} refreshPaused={payAsYouGo} />
+        {account.credentials_invalid && !payAsYouGo && account.usage && <p className="mt-2 text-xs text-amber-700 dark:text-amber-300">{t("Cached usage")}</p>}
+      </section>
 
       {/* Last refresh time */}
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs mb-3">
@@ -379,7 +350,7 @@ export function AccountCard({
       {/* Actions */}
       <div className="mt-3 space-y-2">
         <div className="flex w-full">
-        {account.credentials_invalid ? (
+        {unavailable ? (
           <button onClick={onRelogin} disabled={readOnly || !onRelogin || switching || switchDisabled} className="w-full whitespace-nowrap px-4 py-2 text-sm font-medium rounded-lg bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 disabled:opacity-50">{t("Sign in again")}</button>
         ) : account.is_active ? (
           <button
@@ -414,22 +385,11 @@ export function AccountCard({
         <button onClick={handleRefresh} disabled={isRefreshing || account.usageLoading} title={t("Refresh usage")} aria-label={t("Refresh usage")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 transition-colors hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400 disabled:cursor-wait disabled:opacity-50 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-300 dark:hover:bg-blue-900/20"><ActionIcon name="refresh" spinning={isRefreshing} /></button>
         <button disabled={readOnly} onClick={() => void onToggleRisk()} title={t(account.risk_controlled ? "Move out of risk control" : "Move to risk control")} aria-label={t(account.risk_controlled ? "Move out of risk control" : "Move to risk control")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300 hover:brightness-95 disabled:opacity-50"><ActionIcon name={account.risk_controlled ? "risk-remove" : "risk-add"} /></button>
         <button onClick={onExport} disabled={readOnly || !desktopActions} title={t("Export JSON")} aria-label={t("Export JSON")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-300 hover:brightness-95 disabled:opacity-50"><ActionIcon name="export" /></button>
-        <button onClick={() => void onWarmup()} disabled={!desktopActions || warmingUp} title={t("Send warm-up")} aria-label={t("Send warm-up")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-700 dark:bg-amber-900/20 hover:brightness-95 disabled:opacity-50"><ActionIcon name="warmup" /></button>
-        <button onClick={() => setStatsOpen(true)} title={t("Usage statistics")} aria-label={t("Usage statistics")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-600 hover:bg-blue-50 hover:text-blue-600 dark:bg-gray-800 dark:text-gray-300"><ActionIcon name="stats" /></button>
-        {onToggleAutoWarmup && <button disabled={!desktopActions || autoWarmupManagedByAll} onClick={onToggleAutoWarmup} aria-pressed={autoWarmupEnabled} title={`${t("Auto Warm Up")}: ${autoWarmupLabel ?? t(autoWarmupEnabled ? "on" : "off")}`} aria-label={t("Auto Warm Up")} className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors disabled:opacity-50 ${autoWarmupEnabled ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-950" : "bg-gray-100 text-gray-500 dark:bg-gray-800"}`}><ActionIcon name="auto" /></button>}
+        <button onClick={() => void onWarmup()} disabled={unavailable || !desktopActions || warmingUp} title={t("Send warm-up")} aria-label={t("Send warm-up")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-700 dark:bg-amber-900/20 hover:brightness-95 disabled:opacity-50"><ActionIcon name="warmup" /></button>
+        {onToggleAutoWarmup && <button disabled={unavailable || !desktopActions || autoWarmupManagedByAll} onClick={onToggleAutoWarmup} aria-pressed={autoWarmupEnabled} title={`${t("Auto Warm Up")}: ${autoWarmupLabel ?? t(autoWarmupEnabled ? "on" : "off")}`} aria-label={t("Auto Warm Up")} className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors disabled:opacity-50 ${autoWarmupEnabled ? "bg-emerald-50 text-emerald-600 dark:bg-emerald-950" : "bg-gray-100 text-gray-500 dark:bg-gray-800"}`}><ActionIcon name="auto" /></button>}
         <button onClick={onDelete} disabled={readOnly} title={t("Remove account")} aria-label={t("Remove account")} className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-red-50 text-red-600 dark:bg-red-900/20 hover:brightness-95 disabled:opacity-50"><ActionIcon name="delete" /></button>
         </div>
       </div>
-      <AccountUsageStats
-        accountId={account.id}
-        accountName={masked ? t("Usage statistics") : account.name}
-        onClose={closeStats}
-        enabled={!account.risk_controlled && !account.credentials_invalid && account.auth_mode === "chat_g_p_t"}
-        open={statsOpen}
-        usage={account.usage}
-        usageLoading={account.usageLoading}
-        onStatsLoaded={handleStatsLoaded}
-      />
     </div>
   );
 }

@@ -1,10 +1,10 @@
 import {
-  FolderSync, ChartColumn, CloudUpload, FileInput, FileOutput, LoaderCircle,
+  FolderSync, CloudUpload, FileInput, FileOutput, LoaderCircle,
   Pencil, Plus, RotateCw, Settings, ShieldMinus, ShieldPlus, Timer, Trash2, Zap,
   type LucideIcon,
 } from "lucide-react";
 
-type Action = "sync" | "risk-add" | "risk-remove" | "transfer" | "refresh" | "settings" | "import" | "export" | "warmup" | "delete" | "add" | "rename" | "stats" | "auto";
+type Action = "sync" | "risk-add" | "risk-remove" | "transfer" | "refresh" | "settings" | "import" | "export" | "warmup" | "delete" | "add" | "rename" | "auto";
 const icons: Record<Action, LucideIcon> = {
   sync: CloudUpload,
   "risk-add": ShieldPlus,
@@ -18,7 +18,6 @@ const icons: Record<Action, LucideIcon> = {
   delete: Trash2,
   add: Plus,
   rename: Pencil,
-  stats: ChartColumn,
   auto: Timer,
 };
 

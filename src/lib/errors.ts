@@ -22,15 +22,14 @@ const transferErrors: Record<string, string> = {
 
 export function localizeError(error: unknown, locale: AppLocale = getLocale()): string {
   const message = error instanceof Error ? error.message : String(error ?? "");
-  if (message === USAGE_BASED_ERROR) return locale === "zh-CN"
-    ? "当前类型已变为团队按量付费，额度刷新失败，已暂停自动刷新；有缓存时继续显示最近缓存信息"
-    : "The current type is Team pay-as-you-go. Usage refresh failed and automatic refresh is paused; the last cached quota is retained when available.";
+  if (message === USAGE_BASED_ERROR) return tr("Team pay-as-you-go", locale);
   if (transferErrors[message]) return locale === "zh-CN" ? message : transferErrors[message];
   const translated = tr(message, locale);
   if (translated !== message) return translated;
   const choose = (zh: string, en: string) => locale === "zh-CN" ? zh : en;
   if (/Account name must contain/i.test(message)) return choose("账号名称最多 120 个字符，不能包含控制字符；登录时可以留空", "Account names can contain up to 120 characters and no control characters; leave blank when signing in to use the email.");
-  if (/401|unauthorized|refresh_token_reused|invalid_grant/i.test(message)) return choose("登录验证失败，请重新登录或导入最新凭据后重试", "Authentication failed. Sign in again or import current credentials.");
+  if (/refresh_token_(reused|expired|invalidated)|invalid_grant|token_revoked|account_deactivated|account credentials invalid/i.test(message)) return choose("登录验证失败，请重新登录或导入最新凭据后重试", "Authentication failed. Sign in again or import current credentials.");
+  if (/\b401\b|unauthorized/i.test(message)) return choose("登录验证失败，请稍后刷新重试", "Authentication failed for this request. Please refresh and try again.");
   if (/403|forbidden/i.test(message)) return choose("请求被拒绝，请检查网络或账号权限后重试", "Request denied. Check your network or account permissions.");
   if (/429|too many requests/i.test(message)) return choose("请求过于频繁，请稍后重试", "Too many requests. Please retry later.");
   if (/busy|lock|正在被其他操作/.test(message)) return choose("账号数据正在处理中，请稍后重试", "Account data is busy. Please retry shortly.");

@@ -1,7 +1,7 @@
 //! Usage query Tauri commands
 
 use crate::api::usage::{
-    fetch_chatgpt_account_metadata, get_account_usage, refresh_all_usage,
+    check_pay_as_you_go, fetch_chatgpt_account_metadata, get_account_usage, refresh_all_usage,
     warmup_account as send_warmup, ChatGptAccountMetadata,
 };
 use crate::auth::{ensure_chatgpt_tokens_fresh, get_account, load_accounts};
@@ -63,17 +63,36 @@ pub async fn fetch_usage_with_retry(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
 
+    if !retry_invalid {
+        if let Some(error) = account.unavailable_error() {
+            return Err(error.into());
+        }
+    }
     if retry_invalid && account.credentials_invalid {
         let mut probe = match &account.auth_data {
-            AuthData::ChatGPT { .. } => crate::auth::retry_chatgpt_tokens(&account)
-                .await
-                .map_err(|e| e.to_string())?,
+            AuthData::ChatGPT { .. } => {
+                // Older versions could flag a workspace after an endpoint-specific 401.
+                if let Some(usage) = check_pay_as_you_go(&account).await {
+                    crate::auth::storage::observe_quota_plan(
+                        &account.id,
+                        usage.plan_type.clone(),
+                        false,
+                    )
+                    .map_err(|e| e.to_string())?;
+                    crate::auth::storage::mark_credentials_valid(&account)
+                        .map_err(|e| e.to_string())?;
+                    return Ok(usage);
+                }
+                crate::auth::retry_chatgpt_tokens(&account)
+                    .await
+                    .map_err(|e| e.to_string())?
+            }
             AuthData::ApiKey { .. } => account,
         };
         // Clear only the request snapshot; persist recovery after a successful query.
         probe.credentials_invalid = false;
         let usage = get_account_usage(&probe).await.map_err(|e| e.to_string())?;
-        if usage.error.is_none() {
+        if usage.error.is_none() || is_usage_refresh_paused(usage.plan_type.as_deref()) {
             crate::auth::storage::mark_credentials_valid(&probe).map_err(|e| e.to_string())?;
         }
         return Ok(usage);
@@ -109,8 +128,8 @@ pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo,
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
 
-    if account.credentials_invalid {
-        return Err("Account credentials invalid; sign in again".into());
+    if let Some(error) = account.unavailable_error() {
+        return Err(error.into());
     }
     let recently_refreshed = METADATA_REFRESH_TIMES
         .lock()
@@ -129,14 +148,9 @@ pub async fn refresh_account_metadata(account_id: String) -> Result<AccountInfo,
             let refreshed = ensure_chatgpt_tokens_fresh(&account)
                 .await
                 .map_err(|e| e.to_string())?;
-            let live_metadata = match fetch_chatgpt_account_metadata(&refreshed).await {
-                Ok(metadata) => metadata,
-                Err(error) => {
-                    crate::auth::storage::mark_credentials_invalid(&refreshed, &error.to_string())
-                        .map_err(|e| e.to_string())?;
-                    return Err(error.to_string());
-                }
-            };
+            let live_metadata = fetch_chatgpt_account_metadata(&refreshed)
+                .await
+                .map_err(|error| error.to_string())?;
 
             crate::auth::storage::observe_quota_plan(
                 &account_id,
@@ -191,8 +205,8 @@ pub async fn warmup_account(account_id: String) -> Result<(), String> {
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Account not found: {account_id}"))?;
 
-    if account.credentials_invalid {
-        return Err("Account credentials invalid; sign in again".into());
+    if let Some(error) = account.unavailable_error() {
+        return Err(error.into());
     }
 
     send_warmup(&account).await.map_err(|e| e.to_string())
@@ -205,7 +219,7 @@ pub async fn warmup_all_accounts() -> Result<WarmupSummary, String> {
     let accounts: Vec<_> = store
         .accounts
         .into_iter()
-        .filter(|a| !a.risk_controlled)
+        .filter(|a| !a.risk_controlled && !a.is_unavailable())
         .collect();
     let total_accounts = accounts.len();
     let concurrency = total_accounts.min(10).max(1);

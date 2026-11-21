@@ -4,6 +4,10 @@ export function isUsageRefreshPaused(plan?: string | null): boolean {
   return plan?.trim().toLowerCase() === USAGE_BASED_PLAN;
 }
 
+export function isAccountUnavailable(account: { credentials_invalid?: boolean; plan_type?: string | null }): boolean {
+  return !!account.credentials_invalid || isUsageRefreshPaused(account.plan_type);
+}
+
 /** Seat conversions remain in the team category; retain the raw type as refresh state. */
 export function normalizeAccountPlan(plan?: string | null): string {
   const key = plan?.trim().toLowerCase() || "unknown";

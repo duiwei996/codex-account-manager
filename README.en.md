@@ -51,7 +51,7 @@ Top refresh and both warm-up modes target valid accounts in the selected categor
 
 The tray always uses the active account's hourly and weekly remaining quota mode, with no display-mode setting. Old hidden-tray preferences are ignored. macOS shows quota text in the menu bar; Windows keeps the tray icon and its quota panel.
 
-On startup, previously fetched account information, quota and statistics appear immediately while data refreshes in the background. Accounts without cached data are fetched once; expired authorization or request failures preserve the last successful values.
+On startup, previously fetched account information and quota appear immediately while data refreshes in the background. Accounts without cached data are fetched once; expired authorization or request failures preserve the last successful values.
 
 ## Local builds
 

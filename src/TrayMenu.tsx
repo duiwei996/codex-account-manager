@@ -1,14 +1,14 @@
 import { normalizeAccountPlan } from "./lib/accountPlan.ts";
-import { readAccountCache, readStatsCache, writeStatsCache } from "./lib/accountCache";
+import { readAccountCache } from "./lib/accountCache";
 import { ActionIcon } from "./components/ActionIcon";
 import { localizeError } from "./lib/errors";
+import { isAccountUnavailable } from "./lib/accountPlan";
 import { selectRefreshAccounts } from "./lib/refreshPolicy";
-import { isUsageRefreshPaused } from "./lib/accountPlan";
 import { mergeUsageResult, withUsagePlan } from "./lib/usageDisplay";
 import type { RuntimePreferences } from "./hooks/useRuntimePreferences";
 import { getLocale, tr, useLocale } from "./lib/i18n";
 import { useCallback, useEffect, useState } from "react";
-import type { AccountInfo, AccountUsageStats, DockDisplayMode, UsageInfo } from "./types";
+import type { AccountInfo, DockDisplayMode, UsageInfo } from "./types";
 import { invokeBackend, isTauriRuntime } from "./lib/platform";
 import {
   applyTheme,
@@ -100,29 +100,6 @@ function formatExactResetTime(
   return `${hour12}:${minutes} ${period}`;
 }
 
-function formatTokens(tokens: number | null | undefined): string {
-  if (tokens === null || tokens === undefined || !Number.isFinite(tokens)) return "--";
-  const abs = Math.abs(tokens);
-  if (abs >= 1_000_000_000) return `${(tokens / 1_000_000_000).toFixed(1)}B`;
-  if (abs >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
-  if (abs >= 1_000) return `${(tokens / 1_000).toFixed(1)}K`;
-  return `${tokens}`;
-}
-
-function dayKey(offset: number): string {
-  const date = new Date();
-  date.setDate(date.getDate() - offset);
-  const year = date.getFullYear();
-  const month = `${date.getMonth() + 1}`.padStart(2, "0");
-  const day = `${date.getDate()}`.padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function sumDailyTokens(stats: AccountUsageStats, days: number): number {
-  const keys = new Set(Array.from({ length: days }, (_, index) => dayKey(index)));
-  return stats.daily.reduce((total, day) => (keys.has(day.date) ? total + day.tokens : total), 0);
-}
-
 function retainUsageForAccounts(
   usageById: Record<string, UsageInfo>,
   accounts: AccountInfo[]
@@ -148,7 +125,6 @@ function TrayMenu() {
   const [switchingId, setSwitchingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [usageById, setUsageById] = useState<Record<string, UsageInfo>>(() => Object.fromEntries(readAccountCache().filter(a => a.usage).map(a => [a.id, a.usage!])));
-  const [statsById, setStatsById] = useState<Record<string, AccountUsageStats>>(() => Object.fromEntries(readAccountCache().map(a => [a.id, readStatsCache(a.id)]).filter((entry): entry is [string, AccountUsageStats] => !!entry[1])));
   const [refreshing, setRefreshing] = useState(false);
   const [autoWarmupAllEnabled, setAutoWarmupAllEnabled] = useState(readAutoWarmupAllEnabled);
   const [dockDisplayMode, setDockDisplayMode] = useState<DockDisplayMode | null>(null);
@@ -185,50 +161,6 @@ function TrayMenu() {
     );
   }, []);
 
-  const loadActiveStats = useCallback(async (list: AccountInfo[]) => {
-    const active = list.find((account) => account.is_active);
-    if (!active || isUsageRefreshPaused(active.plan_type)) return;
-
-    try {
-      const stats = await invokeBackend<AccountUsageStats>("get_account_usage_stats", {
-        accountId: active.id,
-      });
-      if (stats.account_id !== active.id || !stats.available || stats.error) return;
-      writeStatsCache(stats);
-      setStatsById((prev) => ({ ...prev, [active.id]: stats }));
-    } catch (err) {
-      setStatsById((prev) => ({
-        ...prev,
-        [active.id]: prev[active.id] ?? {
-          account_id: active.id,
-          available: false,
-          source: t("Codex usage stats via ChatGPT backend"),
-          generated_at: null,
-          stats_as_of: null,
-          summary: {
-            lifetime_tokens: null,
-            peak_daily_tokens: null,
-            longest_task_seconds: null,
-            current_streak_days: null,
-            longest_streak_days: null,
-          },
-          activity: {
-            fast_mode_percent: null,
-            reasoning_effort: null,
-            reasoning_effort_percent: null,
-            skills_explored: null,
-            total_skills_used: null,
-            total_threads: null,
-          },
-          daily: [],
-          top_invocations: [],
-          reset_credits: null,
-          error: formatError(err),
-        },
-      }));
-    }
-  }, []);
-
   const loadDockDisplayMode = useCallback(async () => {
     try {
       const mode = await invokeBackend<DockDisplayMode | null>("get_dock_display_mode");
@@ -248,14 +180,13 @@ function TrayMenu() {
       if (refresh) {
         const preferences = await invokeBackend<RuntimePreferences>("get_runtime_preferences");
         void loadUsage(selectRefreshAccounts(list, preferences.refresh_scope, preferences.selected_plan_tab));
-        void loadActiveStats(list);
       }
     } catch (err) {
       setError(formatError(err));
     } finally {
       setLoading(false);
     }
-  }, [loadActiveStats, loadDockDisplayMode, loadUsage]);
+  }, [loadDockDisplayMode, loadUsage]);
 
   // Manual refresh: re-pull accounts and actively fetch fresh usage once.
   const handleRefresh = useCallback(async () => {
@@ -265,13 +196,13 @@ function TrayMenu() {
       setAccounts(list);
       setUsageById((prev) => retainUsageForAccounts(prev, list));
       setError(null);
-      await Promise.all([loadUsage(list), loadActiveStats(list)]);
+      await loadUsage(selectRefreshAccounts(list, "category"));
     } catch (err) {
       setError(formatError(err));
     } finally {
       setRefreshing(false);
     }
-  }, [loadActiveStats, loadUsage]);
+  }, [loadUsage]);
 
   const handleAutoWarmupToggle = useCallback(async () => {
     const next = !autoWarmupAllEnabled;
@@ -445,7 +376,6 @@ function TrayMenu() {
             const planLabel = formatPlan(account.plan_type);
             const plan = planLabel ? planLabel.toLowerCase() : null;
             const usage = usageById[account.id];
-            const stats = statsById[account.id];
             const windows =
               usage && !usage.error
                 ? ([
@@ -470,7 +400,7 @@ function TrayMenu() {
               <button
                 key={account.id}
                 onClick={() => void handleSwitch(account)}
-                disabled={switchingId !== null}
+                disabled={switchingId !== null || isAccountUnavailable(account)}
                 className={`flex w-full items-start gap-2 rounded-lg px-2 py-1.5 text-left transition-colors disabled:opacity-60 ${
                   account.is_active
                     ? "bg-gray-100 dark:bg-gray-800"
@@ -550,22 +480,6 @@ function TrayMenu() {
                       {account.email}
                     </span>
                   ) : null}
-                  {account.is_active && stats?.available && (
-                    <span className="mt-2 grid grid-cols-2 gap-1.5">
-                      <span className="rounded-md bg-white px-2 py-1 text-[11px] text-gray-600 shadow-sm dark:bg-gray-950 dark:text-gray-300">
-                        <span className="block font-medium text-gray-900 dark:text-gray-100">
-                          {formatTokens(sumDailyTokens(stats, 1))}
-                        </span>
-                        <span>{t("today")}</span>
-                      </span>
-                      <span className="rounded-md bg-white px-2 py-1 text-[11px] text-gray-600 shadow-sm dark:bg-gray-950 dark:text-gray-300">
-                        <span className="block font-medium text-gray-900 dark:text-gray-100">
-                          {formatTokens(sumDailyTokens(stats, 7))}
-                        </span>
-                        <span>{t("last 7 days")}</span>
-                      </span>
-                    </span>
-                  )}
                 </span>
                 {switchingId === account.id && (
                   <span className="shrink-0 text-xs text-gray-400">...</span>

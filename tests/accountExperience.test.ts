@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { getWeeklyResetsAt } from "../src/lib/accountDisplay.ts";
 import { test } from "node:test";
 import { readFileSync, readdirSync } from "node:fs";
 import zh from "../src/lib/locales/zh-CN.ts";
@@ -67,4 +68,13 @@ test("partial account details survive errors and never migrate to another accoun
   assert.equal(mergeUsageResult(previous,{...failed,account_id:"b"}).credits_balance,undefined);
   const fresh = mergeUsageResult(undefined,previous);
   assert.ok(fresh.recorded_at && Number.isFinite(Date.parse(fresh.recorded_at)));
+});
+test("weekly reset deadlines ignore session reset times and recognize older primary-slot data", () => {
+  const usage = { account_id: "a", plan_type: "team" } as UsageInfo;
+  assert.equal(getWeeklyResetsAt({ ...usage, primary_window_minutes: 300, primary_resets_at: 10,
+    secondary_window_minutes: 10080, secondary_resets_at: 20 }), 20);
+  assert.equal(getWeeklyResetsAt({ ...usage, primary_window_minutes: 10080, primary_resets_at: 30,
+    secondary_window_minutes: null, secondary_resets_at: null }), 30);
+  assert.equal(getWeeklyResetsAt({ ...usage, primary_window_minutes: 300, primary_resets_at: 10,
+    secondary_window_minutes: null, secondary_resets_at: null }), null);
 });

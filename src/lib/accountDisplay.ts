@@ -8,8 +8,13 @@ export function getPreferredUsedPercent(usage: UsageInfo | undefined): number | 
   return usage?.primary_used_percent ?? usage?.secondary_used_percent;
 }
 
-export function getPreferredResetsAt(usage: UsageInfo | undefined): number | null | undefined {
-  return usage?.primary_resets_at ?? usage?.secondary_resets_at;
+export function getWeeklyResetsAt(usage: UsageInfo | undefined): number | null {
+  if (!usage) return null;
+  // Older cached responses can still have the weekly window in the primary slot.
+  const weeklyMinutes = 7 * 24 * 60;
+  if (usage.secondary_window_minutes === weeklyMinutes) return usage.secondary_resets_at ?? null;
+  if (usage.primary_window_minutes === weeklyMinutes) return usage.primary_resets_at ?? null;
+  return usage.secondary_window_minutes == null ? usage.secondary_resets_at ?? null : null;
 }
 
 export function getTimedWarmupTargets(accounts: AccountWithUsage[]): AccountWithUsage[] {

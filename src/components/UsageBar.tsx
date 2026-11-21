@@ -79,7 +79,7 @@ function RateLimitBar({
 export function UsageBar({ usage, loading, refreshPaused }: UsageBarProps) {
   const locale = useLocale();
   const t = (text: string) => tr(text, locale);
-  if (refreshPaused && !usage) return <p role="status" className="text-xs text-amber-700 dark:text-amber-300">{localizeError(USAGE_BASED_ERROR, locale)} · {t("No cached quota available")}</p>;
+  if (refreshPaused && !usage) return <p role="status" className="text-xs text-amber-700 dark:text-amber-300">{t("No cached quota available")}</p>;
   if (loading && !usage) {
     return (
       <div className="space-y-2">
@@ -104,8 +104,7 @@ export function UsageBar({ usage, loading, refreshPaused }: UsageBarProps) {
   if (usage.error && usage.primary_used_percent == null && usage.secondary_used_percent == null) {
     return (
       <div className="text-xs text-gray-400 dark:text-gray-500 italic py-1">
-        {localizeError(usage.error, locale)}
-        {usage.error === USAGE_BASED_ERROR && ` · ${t("No cached quota available")}`}
+        {refreshPaused || usage.error === USAGE_BASED_ERROR ? t("No cached quota available") : localizeError(usage.error, locale)}
       </div>
     );
   }
@@ -123,7 +122,7 @@ export function UsageBar({ usage, loading, refreshPaused }: UsageBarProps) {
 
   return (
     <div className="space-y-3">
-      {(usage.error || usage.from_cache) && <p role="status" className="rounded-lg bg-amber-50 p-2 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">{usage.error && `${localizeError(usage.error, locale)} · `}{t("Cached usage")}{usage.recorded_at && ` · ${t("Recorded at")}: ${new Date(usage.recorded_at).toLocaleString(locale)}`}</p>}
+      {(refreshPaused || usage.error || usage.from_cache) && <p role="status" className="rounded-lg bg-amber-50 p-2 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-300">{!refreshPaused && usage.error && usage.error !== USAGE_BASED_ERROR && `${localizeError(usage.error, locale)} · `}{t("Cached usage")}{usage.recorded_at && ` · ${t("Recorded at")}: ${new Date(usage.recorded_at).toLocaleString(locale)}`}</p>}
       {hasPrimary && (
         <RateLimitBar
           label={t("5h Limit")}

@@ -294,8 +294,7 @@ async fn refresh_tokens_with_refresh_token(refresh_token: &str) -> Result<Refres
 
     if !response.status().is_success() {
         let status = response.status();
-        let code = response
-            .json::<serde_json::Value>()
+        let code = crate::api::http::json::<serde_json::Value>(response)
             .await
             .ok()
             .and_then(|v| {
@@ -312,6 +311,7 @@ async fn refresh_tokens_with_refresh_token(refresh_token: &str) -> Result<Refres
                     "refresh_token_reused",
                     "refresh_token_expired",
                     "refresh_token_invalidated",
+                    "token_revoked",
                     "account_deactivated",
                 ]
                 .contains(&code.as_str())

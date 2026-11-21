@@ -115,8 +115,7 @@ impl AppSettings {
 
     pub fn should_refresh(&self, account: &StoredAccount, active_id: Option<&str>) -> bool {
         !account.risk_controlled
-            && !account.credentials_invalid
-            && !is_usage_refresh_paused(account.plan_type.as_deref())
+            && !account.is_unavailable()
             && self.selected_plan_tab != "risk"
             && match self.refresh_scope {
                 RefreshScope::Current => active_id == Some(account.id.as_str()),
@@ -182,6 +181,20 @@ pub struct StoredAccount {
 }
 
 impl StoredAccount {
+    pub fn is_unavailable(&self) -> bool {
+        self.unavailable_error().is_some()
+    }
+
+    pub fn unavailable_error(&self) -> Option<&'static str> {
+        if is_usage_refresh_paused(self.plan_type.as_deref()) {
+            Some(USAGE_BASED_ERROR)
+        } else if self.credentials_invalid {
+            Some("Account credentials invalid; sign in again")
+        } else {
+            None
+        }
+    }
+
     fn resolved_name(
         name: String,
         email: Option<&String>,
