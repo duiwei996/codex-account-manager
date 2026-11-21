@@ -338,7 +338,7 @@ test("category refresh excludes invalid accounts on first load and follows tab c
 });
 
 
-test("main page refresh and both warmups include the active account and exclude other categories and invalid accounts", async () => {
+test("main page refresh and both warmups include the active account and exclude other categories and invalid accounts", async (t) => {
   await act(async () => root.render(null));
   const { default: App } = await server.ssrLoadModule("/src/App.tsx");
   const fixture = () => [
@@ -384,11 +384,16 @@ test("main page refresh and both warmups include the active account and exclude 
     await click('#account-tab-free');
     await settle();
     assert.deepEqual(ids('warmup_account'), ['other-free']);
+    // The scheduler only fires during the exact configured minute.
+    t.mock.timers.enable({ apis: ['Date'], now: new Date(2026, 10, 21, 12, 30) });
     await prepare('timed');
+    // Let scheduled effects and backend promises finish before inspecting calls.
+    for (let i = 0; i < 20 && ids('warmup_account').length < 2; i++) await settle();
     assert.deepEqual(ids('warmup_account'), ['active-plus', 'team']);
     assert.ok(!calls.some(c => c.command === 'get_usage' && ['other-free', 'invalid-team', 'risk-team'].includes(c.args.accountId)));
   } finally {
     await act(async () => root.render(null));
+    t.mock.timers.reset();
     customUsage = null;
     localStorage.clear();
   }
