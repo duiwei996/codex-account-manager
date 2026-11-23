@@ -81,6 +81,8 @@ Windows 的 `build:local` 会在官方安装器外生成项目自有安装入口
 
 根目录 `VERSION` 是唯一版本来源。本地构建不会自动加号；云端构建读取相同版本，已存在的版本会跳过发布，低于已有版本则报错。
 
+面向用户的功能新增、行为调整或修复，在交付本地安装包或提交功能改动前，必须先核对 `VERSION` 并完成本批次升版。兼容性修复用 `pnpm version:patch`，向后兼容的新功能用 `pnpm version:minor`，破坏性更新用 `pnpm version:major`。同一批次升版一次，后续重试构建沿用该版本。仅修改文档、测试或内部工具时沿用当前版本。
+
 修改 `VERSION` 后运行 `pnpm version:sync` 同步前端、Tauri 和 Cargo；也可通过 `pnpm version:bump 1.0.5` 明确更新所有版本文件。`pnpm version:check` 和构建入口会检查一致性。正式发布前确认目标版本尚未使用；已预留的草稿也视为已使用，不覆盖原有产物。
 
 推送前运行 `pnpm check:ci`，核对工具链、版本、冻结锁文件安装、Rust 格式、前后端依赖安全审计、前端编译及测试、当前系统的 Rust 测试；任一检查失败即停止。CI 的 `pnpm check:frontend` 和 `pnpm check:rust` 复用同一检查脚本，`pnpm build:local` 强制执行完整检查。审计从官方源读取当前漏洞库，过去通过的锁文件也须重新检查；官方预编译审计器可通过 `CARGO_AUDIT_BIN` 指定路径。仅需格式和安全审计时可运行 `pnpm release:preflight`。本地检查不替代云端其他系统、签名和发布产物的验收。更新插件关闭旧版 ZIP 解包支持；本项目使用原始 EXE/MSI、AppImage 和 macOS tar.gz 更新包。
