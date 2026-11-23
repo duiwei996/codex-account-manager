@@ -57,6 +57,23 @@ test("editing VERSION requires synchronization; validation detects mismatch and 
   assert.equal(verifyProjectVersion(directory), "2.3.5");
 });
 
+test("version check blocks missing and empty release notes before packaging", () => {
+  const directory = fixture();
+  const script = fileURLToPath(new URL("../scripts/project-version.mjs", import.meta.url));
+  const changelog = join(directory, "CHANGELOG.md");
+  synchronizeProjectVersion(directory, "2.3.4");
+  const verify = () => execFileSync(process.execPath, [script, "--check"], {
+    cwd: directory, encoding: "utf8", stdio: "pipe",
+  });
+
+  writeFileSync(changelog, "## 2.3.3\n\n- Previous release.\n");
+  assert.throws(verify, /Missing release notes for 2\.3\.4/);
+  writeFileSync(changelog, "## 2.3.4\n\n## 2.3.3\n\n- Previous release.\n");
+  assert.throws(verify, /Empty release notes for 2\.3\.4/);
+  writeFileSync(changelog, "## 2.3.4\n\n- Current release.\n");
+  assert.match(verify(), /version and release notes verified: 2\.3\.4/);
+});
+
 test("invalid input or malformed derived metadata changes no version files", () => {
   const directory = fixture();
   const before = readFileSync(join(directory, "package.json"), "utf8");

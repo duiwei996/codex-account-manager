@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { readReleaseNotes } from "./create-draft-release.mjs";
 
 export function parseVersion(value) {
   if (!/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.test(value)) throw new Error(`Invalid version: ${value}`);
@@ -56,8 +57,11 @@ if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.m
   try {
     const mode = process.argv[2];
     if (mode === "--sync") console.log(`Version synchronized: ${synchronizeProjectVersion()}`);
-    else if (mode === "--check") console.log(`Project version verified: ${verifyProjectVersion(process.cwd(), process.argv[3])}`);
-    else throw new Error("Usage: node scripts/project-version.mjs <--sync|--check [expected]>");
+    else if (mode === "--check") {
+      const version = verifyProjectVersion(process.cwd(), process.argv[3]);
+      readReleaseNotes(version, readFileSync(resolve("CHANGELOG.md"), "utf8"));
+      console.log(`Project version and release notes verified: ${version}`);
+    } else throw new Error("Usage: node scripts/project-version.mjs <--sync|--check [expected]>");
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;
