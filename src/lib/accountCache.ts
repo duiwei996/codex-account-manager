@@ -34,6 +34,7 @@ function cleanAccount(value: unknown): AccountWithUsage | undefined {
   if (!object(value) || typeof value.id !== "string" || typeof value.name !== "string" || !["api_key", "chat_g_p_t"].includes(String(value.auth_mode))) return undefined;
   return withUsagePlan({
     id: value.id, name: value.name, email: string(value.email), plan_type: string(value.plan_type),
+    display_plan_override: string(value.display_plan_override),
     subscription_expires_at: date(value.subscription_expires_at) ?? null,
     auth_mode: value.auth_mode as AccountWithUsage["auth_mode"], is_active: value.is_active === true,
     credentials_invalid: value.credentials_invalid === true,

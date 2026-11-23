@@ -1,11 +1,11 @@
-import { isAccountUnavailable, normalizeAccountPlan } from "./accountPlan.ts";
+import { getDisplayPlan, isAccountUnavailable, normalizeAccountPlan } from "./accountPlan.ts";
 import type { AccountInfo } from "../types";
 
 export function getAccountPlanKey(account: AccountInfo) {
   if (account.risk_controlled) return "risk";
   return account.auth_mode === "api_key"
     ? "api_key"
-    : normalizeAccountPlan(account.plan_type);
+    : normalizeAccountPlan(getDisplayPlan(account));
 }
 
 /** Preserve the selected sort order within each plan; never infer a free plan. */

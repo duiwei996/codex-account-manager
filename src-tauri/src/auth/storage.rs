@@ -304,6 +304,7 @@ pub(crate) fn upsert_account(
     mut account: StoredAccount,
 ) -> Result<StoredAccount> {
     account.credentials_invalid = false;
+    account.display_plan_override = None;
     super::validation::validate_account(&account)?;
     let existing = store
         .accounts
@@ -976,6 +977,7 @@ pub(crate) fn mark_credentials_valid(account: &StoredAccount) -> Result<()> {
                 == serde_json::to_value(&account.auth_data)?
             {
                 current.credentials_invalid = false;
+                current.display_plan_override = None;
             }
         }
         Ok(())

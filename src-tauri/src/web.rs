@@ -3,8 +3,8 @@ use std::path::{Component, Path, PathBuf};
 use crate::commands::{
     add_account_from_auth_json_text, delete_account, fetch_usage_with_retry,
     get_account_reset_credits, get_active_account_info, get_masked_account_ids, list_accounts,
-    refresh_account_metadata, refresh_all_accounts_usage, rename_account, set_masked_account_ids,
-    switch_account,
+    refresh_account_metadata, refresh_all_accounts_usage, rename_account, set_account_display_plan,
+    set_masked_account_ids, switch_account,
 };
 use anyhow::Context;
 use serde::de::DeserializeOwned;
@@ -252,6 +252,7 @@ fn web_command_allowed(command: &str, allow_writes: bool) -> bool {
             command,
             "set_account_risk_control"
                 | "rename_account"
+                | "set_account_display_plan"
                 | "delete_account"
                 | "switch_account"
                 | "set_masked_account_ids"
@@ -314,6 +315,16 @@ async fn invoke_web_command(command: &str, payload: Value) -> Result<Value, Stri
         "rename_account" => {
             let args: RenameAccountArgs = parse_args(payload)?;
             to_json(rename_account(args.account_id, args.new_name).await?)
+        }
+        "set_account_display_plan" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Args {
+                account_id: String,
+                display_plan: Option<String>,
+            }
+            let args: Args = parse_args(payload)?;
+            to_json(set_account_display_plan(args.account_id, args.display_plan).await?)
         }
         "get_masked_account_ids" => to_json(get_masked_account_ids().await?),
         "set_masked_account_ids" => {

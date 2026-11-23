@@ -64,6 +64,94 @@ test("other accounts keep their normal switch action", async () => {
   });
 });
 
+test("account cards copy the full email and keep the team label visible alongside login status", async (t) => {
+  const email = "member@example.com";
+  const copied = [];
+  const clipboard = { writeText: async value => { copied.push(value); } };
+  const descriptor = Object.getOwnPropertyDescriptor(globalThis.navigator, "clipboard");
+  Object.defineProperty(globalThis.navigator, "clipboard", { configurable: true, value: clipboard });
+  t.after(() => {
+    if (descriptor) Object.defineProperty(globalThis.navigator, "clipboard", descriptor);
+    else Reflect.deleteProperty(globalThis.navigator, "clipboard");
+  });
+
+  const account = { id: "team-email", name: "Team account", email, auth_mode: "chat_g_p_t",
+    is_active: false, plan_type: "team", credentials_invalid: true };
+  await withCard({ account }, async container => {
+    assert.ok([...container.querySelectorAll("header span")].some(span => span.textContent === "team"));
+    assert.match(container.textContent, /登录已失效/);
+    const button = container.querySelector('button[aria-label="复制邮箱"]');
+    assert.equal(button.previousElementSibling.textContent, email);
+    await act(async () => button.click());
+    assert.deepEqual(copied, [email]);
+    assert.equal(button.title, "已复制");
+
+    clipboard.writeText = async () => { throw new Error("Clipboard unavailable"); };
+    await act(async () => button.click());
+    assert.match(container.querySelector('[role="status"]').textContent, /请手动复制/);
+  });
+  await withCard({ account, masked: true }, async container => {
+    assert.equal(container.querySelector('button[aria-label="复制邮箱"]').disabled, true);
+  });
+});
+
+test("an expired team account accepts a manual display plan and can return to automatic", async () => {
+  const plan = "self_serve_business_usage_based";
+  const account = { id: "manual-plan", name: "Team account", auth_mode: "chat_g_p_t",
+    is_active: false, plan_type: "team", credentials_invalid: true };
+
+  for (const [current, next] of [[null, plan], [plan, null]]) {
+    const changes = [];
+    await withCard({
+      account: { ...account, display_plan_override: current },
+      onChangeDisplayPlan: async value => { changes.push(value); },
+    }, async container => {
+      assert.match(container.textContent, /登录已失效/);
+      const button = container.querySelector('button[aria-label="更改显示套餐"]');
+      assert.equal(button.textContent, "team");
+      const [titleRow, detailsRow] = container.querySelector("header").children;
+      assert.doesNotMatch(titleRow.textContent, /登录已失效|团队按量付费/);
+      assert.match(detailsRow.textContent, /登录已失效/);
+      if (current) {
+        const label = [...detailsRow.querySelectorAll("span")].find(span => span.textContent === "团队按量付费（手动）");
+        assert.ok(label?.classList.contains("whitespace-nowrap"));
+      }
+      await act(async () => button.click());
+      const select = container.querySelector("select");
+      assert.equal(select.value, current ?? "");
+      select.value = next ?? "";
+      await act(async () => select.dispatchEvent(new window.Event("change", { bubbles: true })));
+      assert.deepEqual(changes, [next]);
+      assert.equal(container.querySelector("select"), null);
+    });
+  }
+  await withCard({
+    account: { ...account, display_plan_override: plan, credentials_invalid: false, risk_controlled: true },
+    onChangeDisplayPlan: async () => { assert.fail("Healthy accounts cannot edit their plan"); },
+  }, async container => {
+    assert.equal(container.querySelector('button[aria-label="更改显示套餐"]'), null);
+    assert.doesNotMatch(container.textContent, /团队按量付费|手动/);
+  });
+});
+
+test("a server-confirmed pay-as-you-go account can sign in again without showing expired credentials", async () => {
+  const account = { id: "valid-payg", name: "Team account", email: "member@example.com",
+    is_active: false, auth_mode: "chat_g_p_t", plan_type: "self_serve_business_usage_based" };
+  let relogins = 0;
+  await withCard({ account, onRelogin() { relogins++; } }, async container => {
+    const [titleRow, detailsRow] = container.querySelector("header").children;
+    assert.match(titleRow.textContent, /team$/);
+    assert.doesNotMatch(titleRow.textContent, /团队按量付费/);
+    assert.match(detailsRow.textContent, /member@example\.com.*团队按量付费/);
+    assert.doesNotMatch(container.textContent, /登录已失效/);
+    const login = [...container.querySelectorAll("button")].find(button => button.textContent === "重新登录");
+    assert.ok(login && !login.disabled);
+    await act(async () => login.click());
+    assert.equal(relogins, 1);
+    assert.equal(container.querySelector('[aria-label="刷新用量"]').disabled, false);
+  });
+});
+
 test("invalid active and inactive accounts offer login instead of switch or restart", async () => {
   for (const is_active of [true, false]) {
     let logins = 0;

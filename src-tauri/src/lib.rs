@@ -17,8 +17,9 @@ use commands::{
     get_masked_account_ids, get_usage, hide_tray_window, import_accounts_json,
     import_accounts_json_file, import_accounts_json_files, kill_codex_processes, list_accounts,
     open_main_window, quit_app, refresh_account_metadata, refresh_all_accounts_usage,
-    rename_account, report_usage, save_accounts_json, set_dock_display_mode,
-    set_masked_account_ids, start_login, switch_account, warmup_account, warmup_all_accounts,
+    rename_account, report_usage, save_accounts_json, set_account_display_plan,
+    set_dock_display_mode, set_masked_account_ids, start_login, switch_account, warmup_account,
+    warmup_all_accounts,
 };
 #[cfg(target_os = "macos")]
 use tauri::Emitter;
@@ -108,6 +109,7 @@ pub fn run() {
             commands::restart_account,
             delete_account,
             rename_account,
+            set_account_display_plan,
             // Masked accounts
             get_masked_account_ids,
             set_masked_account_ids,

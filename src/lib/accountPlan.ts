@@ -13,3 +13,7 @@ export function normalizeAccountPlan(plan?: string | null): string {
   const key = plan?.trim().toLowerCase() || "unknown";
   return isUsageRefreshPaused(key) ? "team" : key;
 }
+
+export function getDisplayPlan(account: { plan_type?: string | null; display_plan_override?: string | null; credentials_invalid?: boolean }): string | null | undefined {
+  return (account.credentials_invalid ? account.display_plan_override : null) ?? account.plan_type;
+}

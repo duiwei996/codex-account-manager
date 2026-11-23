@@ -249,6 +249,45 @@ pub async fn rename_account(account_id: String, new_name: String) -> Result<(), 
     Ok(())
 }
 
+#[tauri::command]
+pub async fn set_account_display_plan(
+    account_id: String,
+    display_plan: Option<String>,
+) -> Result<(), String> {
+    update_accounts(|store| {
+        let account = store
+            .accounts
+            .iter_mut()
+            .find(|account| account.id == account_id)
+            .context("Account not found")?;
+        anyhow::ensure!(
+            account.auth_mode == crate::types::AuthMode::ChatGPT,
+            "Only ChatGPT accounts have a display plan"
+        );
+        anyhow::ensure!(
+            display_plan.is_none() || account.credentials_invalid,
+            "Manual display plans require expired login credentials"
+        );
+        anyhow::ensure!(
+            display_plan.as_deref().is_none_or(|plan| matches!(
+                plan,
+                "free"
+                    | "plus"
+                    | "pro"
+                    | "team"
+                    | crate::types::USAGE_BASED_PLAN
+                    | "business"
+                    | "enterprise"
+                    | "edu"
+            )),
+            "Invalid display plan"
+        );
+        account.display_plan_override = display_plan;
+        Ok(())
+    })
+    .map_err(|error| error.to_string())
+}
+
 /// Get the list of masked account IDs
 #[tauri::command]
 pub async fn get_masked_account_ids() -> Result<Vec<String>, String> {

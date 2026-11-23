@@ -97,9 +97,13 @@ impl AppSettings {
         let key = if matches!(account.auth_mode, AuthMode::ApiKey) {
             "api_key".to_owned()
         } else {
-            account
-                .plan_type
-                .as_deref()
+            let manual_plan = if account.credentials_invalid {
+                account.display_plan_override.as_deref()
+            } else {
+                None
+            };
+            manual_plan
+                .or(account.plan_type.as_deref())
                 .map(str::trim)
                 .filter(|key| !key.is_empty())
                 .unwrap_or("unknown")
@@ -159,6 +163,8 @@ pub struct StoredAccount {
     pub email: Option<String>,
     /// Plan type: free, plus, pro, team, business, enterprise, edu
     pub plan_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_plan_override: Option<String>,
     /// Subscription expiration extracted from ChatGPT ID token, when available
     #[serde(default)]
     pub subscription_expires_at: Option<DateTime<Utc>>,
@@ -229,6 +235,7 @@ impl StoredAccount {
             name: Self::resolved_name(name, None, None, "API key"),
             email: None,
             plan_type: None,
+            display_plan_override: None,
             subscription_expires_at: None,
             auth_mode: AuthMode::ApiKey,
             auth_data: AuthData::ApiKey { key: api_key },
@@ -259,6 +266,7 @@ impl StoredAccount {
             name,
             email,
             plan_type,
+            display_plan_override: None,
             subscription_expires_at,
             auth_mode: AuthMode::ChatGPT,
             auth_data: AuthData::ChatGPT {
@@ -463,6 +471,7 @@ pub struct AccountInfo {
     pub name: String,
     pub email: Option<String>,
     pub plan_type: Option<String>,
+    pub display_plan_override: Option<String>,
     pub subscription_expires_at: Option<DateTime<Utc>>,
     pub auth_mode: AuthMode,
     pub is_active: bool,
@@ -479,6 +488,7 @@ impl AccountInfo {
             name: account.name.clone(),
             email: account.email.clone(),
             plan_type: account.plan_type.clone(),
+            display_plan_override: account.display_plan_override.clone(),
             // Subscription expiry is live account metadata. Stored values and
             // ID-token claims become stale and must not be used for display.
             subscription_expires_at: None,
@@ -716,6 +726,36 @@ mod risk_control_tests {
         assert!(!restored.credentials_invalid);
         restored.plan_type = Some("team".into());
         assert!(settings.should_refresh(&restored, Some(&restored.id)));
+    }
+
+    #[test]
+    fn manual_display_plan_survives_restart_without_overriding_refresh_state() {
+        let mut account = StoredAccount::new_chatgpt(
+            "Test".into(),
+            None,
+            Some("free".into()),
+            None,
+            "id".into(),
+            "access".into(),
+            "refresh".into(),
+            None,
+        );
+        let settings = AppSettings {
+            selected_plan_tab: "team".into(),
+            refresh_scope: RefreshScope::Category,
+            ..Default::default()
+        };
+        assert!(!settings.includes_category(&account));
+        account.credentials_invalid = true;
+        account.display_plan_override = Some(USAGE_BASED_PLAN.into());
+        let saved = serde_json::to_value(&account).unwrap();
+        account = serde_json::from_value(saved).unwrap();
+        assert_eq!(account.plan_type.as_deref(), Some("free"));
+        assert!(settings.includes_category(&account));
+        assert!(!is_usage_refresh_paused(account.plan_type.as_deref()));
+        assert!(!settings.should_refresh(&account, None));
+        account.credentials_invalid = false;
+        assert!(!settings.includes_category(&account));
     }
 
     #[test]

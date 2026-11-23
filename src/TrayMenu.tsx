@@ -1,4 +1,4 @@
-import { normalizeAccountPlan } from "./lib/accountPlan.ts";
+import { getDisplayPlan, normalizeAccountPlan } from "./lib/accountPlan.ts";
 import { readAccountCache } from "./lib/accountCache";
 import { ActionIcon } from "./components/ActionIcon";
 import { localizeError } from "./lib/errors";
@@ -37,13 +37,6 @@ function formatError(err: unknown): string {
   } catch {
     return "Unknown error";
   }
-}
-
-// "plus" -> "Plus". Returns null when there is no usable plan label.
-function formatPlan(plan: string | null): string | null {
-  const trimmed = plan?.trim() ? normalizeAccountPlan(plan) : null;
-  if (!trimmed) return null;
-  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
 }
 
 // Color classes for a rate-limit window based on remaining %, matching the main app.
@@ -373,8 +366,8 @@ function TrayMenu() {
         ) : (
           accounts.map((storedAccount) => {
             const account = withUsagePlan(storedAccount, usageById[storedAccount.id]);
-            const planLabel = formatPlan(account.plan_type);
-            const plan = planLabel ? planLabel.toLowerCase() : null;
+            const displayPlan = getDisplayPlan(account);
+            const plan = displayPlan?.trim() ? normalizeAccountPlan(displayPlan) : null;
             const usage = usageById[account.id];
             const windows =
               usage && !usage.error

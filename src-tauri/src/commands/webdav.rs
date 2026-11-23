@@ -465,6 +465,12 @@ fn restore_account(value: &Value, old: Option<&StoredAccount>) -> Result<StoredA
         serde_json::to_value(&a.auth_data).ok().as_ref() == Some(&credentials["auth_data"])
     });
     data.insert(
+        "display_plan_override".into(),
+        json!(old
+            .filter(|account| same_credentials && account.credentials_invalid)
+            .and_then(|account| account.display_plan_override.as_deref())),
+    );
+    data.insert(
         "credentials_invalid".into(),
         json!(same_credentials && old.is_some_and(|a| a.credentials_invalid)),
     );

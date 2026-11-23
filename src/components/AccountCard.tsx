@@ -1,14 +1,25 @@
-import { isAccountUnavailable, isUsageRefreshPaused, normalizeAccountPlan } from "../lib/accountPlan.ts";
+import { getDisplayPlan, isAccountUnavailable, isUsageRefreshPaused, normalizeAccountPlan, USAGE_BASED_PLAN } from "../lib/accountPlan.ts";
 import { RESET_CACHE_CHANGED_EVENT, readResetCreditsCache, writeResetCreditsCache } from "../lib/accountCache";
 import { ActionIcon } from "./ActionIcon";
 import { getLocale, tr, useLocale } from "../lib/i18n";
 import { useCallback, useState, useRef, useEffect } from "react";
+import { Check, Copy, Pencil } from "lucide-react";
 import type { AccountResetCredits, AccountWithUsage } from "../types";
 import { invokeBackend } from "../lib/platform";
 import { ResetCreditsMenu } from "./ResetCreditsMenu";
 import { UsageBar } from "./UsageBar";
 
 const RESET_CREDITS_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const DISPLAY_PLANS = [
+  ["free", "Free"],
+  ["plus", "Plus"],
+  ["pro", "Pro"],
+  ["team", "Team"],
+  [USAGE_BASED_PLAN, "Team pay-as-you-go"],
+  ["business", "Business"],
+  ["enterprise", "Enterprise"],
+  ["edu", "Edu"],
+] as const;
 
 interface AccountCardProps {
   account: AccountWithUsage;
@@ -21,6 +32,7 @@ interface AccountCardProps {
   onToggleRisk: () => Promise<void>;
   onRefresh: () => Promise<unknown>;
   onRename: (newName: string) => Promise<void>;
+  onChangeDisplayPlan?: (plan: string | null) => Promise<void>;
   readOnly?: boolean;
   desktopActions?: boolean;
   switching?: boolean;
@@ -114,6 +126,7 @@ export function AccountCard({
   onToggleRisk,
   onRefresh,
   onRename,
+  onChangeDisplayPlan,
   switching,
   readOnly = false,
   desktopActions = true,
@@ -135,9 +148,43 @@ export function AccountCard({
   );
   const [isEditing, setIsEditing] = useState(false);
   const [editName, setEditName] = useState(account.name);
+  const [emailCopy, setEmailCopy] = useState<"copied" | "failed" | null>(null);
+  const [editingPlan, setEditingPlan] = useState(false);
+  const [savingPlan, setSavingPlan] = useState(false);
+  const [planSaveFailed, setPlanSaveFailed] = useState(false);
   const [resetCredits, setResetCredits] = useState<AccountResetCredits | null>(() => account.auth_mode === "chat_g_p_t" ? readResetCreditsCache(account.id)?.data ?? null : null);
   const inputRef = useRef<HTMLInputElement>(null);
   const resetRequestSeq = useRef(0);
+
+  useEffect(() => {
+    if (emailCopy !== "copied") return;
+    const timer = setTimeout(() => setEmailCopy(null), 2000);
+    return () => clearTimeout(timer);
+  }, [emailCopy]);
+
+  const copyEmail = async () => {
+    if (!account.email || masked) return;
+    try {
+      await navigator.clipboard.writeText(account.email);
+      setEmailCopy("copied");
+    } catch {
+      setEmailCopy("failed");
+    }
+  };
+
+  const saveDisplayPlan = async (plan: string | null) => {
+    if (!onChangeDisplayPlan || readOnly || savingPlan) return;
+    setSavingPlan(true);
+    setPlanSaveFailed(false);
+    try {
+      await onChangeDisplayPlan(plan);
+      setEditingPlan(false);
+    } catch {
+      setPlanSaveFailed(true);
+    } finally {
+      setSavingPlan(false);
+    }
+  };
 
   useEffect(() => {
     if (isEditing && inputRef.current) {
@@ -187,7 +234,6 @@ export function AccountCard({
 
   const payAsYouGo = isUsageRefreshPaused(account.plan_type);
   const unavailable = isAccountUnavailable(account);
-  const planDisplay = account.auth_mode === "api_key" ? "API Key" : account.plan_type ? normalizeAccountPlan(account.plan_type) : t("Unknown");
 
   const planColors: Record<string, string> = {
     pro: "bg-indigo-50 text-indigo-700 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-300 dark:border-indigo-700",
@@ -198,8 +244,13 @@ export function AccountCard({
     api_key: "bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-700",
   };
 
-  const planKey = account.auth_mode === "api_key" ? "api_key" : normalizeAccountPlan(account.plan_type);
+  const manualPlan = account.credentials_invalid ? account.display_plan_override : null;
+  const planKey = account.auth_mode === "api_key" ? "api_key" : normalizeAccountPlan(getDisplayPlan(account));
+  const planDisplay = planKey === "api_key" ? "API Key"
+    : planKey === "unknown" ? t("Unknown") : planKey;
+  const manualPlanLabel = DISPLAY_PLANS.find(([value]) => value === manualPlan)?.[1];
   const planColorClass = planColors[planKey] || planColors.free;
+  const editablePlan = !!onChangeDisplayPlan && account.auth_mode === "chat_g_p_t" && account.credentials_invalid && !readOnly;
   const showSubscriptionStatus =
     account.auth_mode === "chat_g_p_t" && account.plan_type?.toLowerCase() !== "free";
   const subscriptionStatus = getSubscriptionStatus(account.subscription_expires_at);
@@ -258,14 +309,11 @@ export function AccountCard({
       }`}
     >
       {/* Header */}
-      <div className="flex items-start justify-between mb-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1">
+      <header className="mb-3 space-y-1">
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
             {account.is_active && (
               <span className="shrink-0 rounded-md bg-blue-50 px-1.5 py-0.5 text-xs font-medium text-blue-600 dark:bg-blue-950 dark:text-blue-300">{t("Current")}</span>
-            )}
-            {unavailable && (
-              <span className="shrink-0 rounded-md bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">{t(payAsYouGo ? "Team pay-as-you-go" : "Login expired")}</span>
             )}
             {isEditing ? (
               <input
@@ -288,46 +336,92 @@ export function AccountCard({
             )}
             {!isEditing && <button disabled={readOnly || masked} onClick={() => {setEditName(account.name);setIsEditing(true);}} title={t("Rename")} aria-label={t("Rename")} className="shrink-0 rounded-md p-1 text-gray-400 hover:bg-blue-50 hover:text-blue-600 disabled:opacity-40 dark:hover:bg-blue-950"><ActionIcon name="rename" /></button>}
           </div>
-          {account.email && (
-            <p className="text-sm text-gray-500 dark:text-gray-400 truncate">
-              <BlurredText blur={masked}>{account.email}</BlurredText>
-            </p>
-          )}
+          <div className="flex max-w-[60%] flex-wrap items-center justify-end gap-2">
+            {/* Eye toggle */}
+            {onToggleMask && (
+              <button
+                disabled={readOnly}
+                onClick={onToggleMask}
+                className="p-1 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+                title={masked ? t("Show info") : t("Hide info")}
+              >
+                {masked ? (
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
+                  </svg>
+                ) : (
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+                  </svg>
+                )}
+              </button>
+            )}
+            {editablePlan ? (
+              <button type="button" aria-expanded={editingPlan} aria-label={t("Change display plan")}
+                title={t("Change display plan")} disabled={savingPlan}
+                onClick={() => { setEditingPlan(!editingPlan); setPlanSaveFailed(false); }}
+                className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-medium hover:brightness-95 ${planColorClass}`}>
+                {planDisplay}<Pencil size={12} aria-hidden="true" />
+              </button>
+            ) : (
+              <span className={`rounded-full border px-2.5 py-1 text-xs font-medium ${planColorClass}`}>{planDisplay}</span>
+            )}
+            <ResetCreditsMenu
+              compact={compactResetCredits}
+              resetCredits={resetCredits}
+            />
+          </div>
         </div>
+        {(account.email || account.credentials_invalid || payAsYouGo) && (
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            {account.email && (
+              <div className="flex min-w-0 max-w-full items-center gap-1 text-sm text-gray-500 dark:text-gray-400">
+                <span className={`min-w-0 truncate ${masked ? "select-none blur-sm" : "select-text"}`}>{account.email}</span>
+                <button
+                  type="button"
+                  disabled={masked}
+                  onClick={() => void copyEmail()}
+                  aria-label={t("Copy email")}
+                  title={t(emailCopy === "copied" ? "Copied" : "Copy email")}
+                  className="shrink-0 rounded-md p-1 text-gray-400 hover:bg-blue-50 hover:text-blue-600 focus-visible:ring-2 focus-visible:ring-blue-400 disabled:opacity-40 dark:hover:bg-blue-950"
+                >
+                  {emailCopy === "copied" ? <Check size={14} aria-hidden="true" /> : <Copy size={14} aria-hidden="true" />}
+                </button>
+              </div>
+            )}
+            {account.credentials_invalid && (
+              <span className="rounded-md bg-red-100 px-1.5 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">{t("Login expired")}</span>
+            )}
+            {payAsYouGo && (
+              <span className="rounded-md bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">{t("Team pay-as-you-go")}</span>
+            )}
+            {manualPlanLabel && (!payAsYouGo || manualPlan !== USAGE_BASED_PLAN) && (
+              <span className="shrink-0 whitespace-nowrap rounded-md bg-blue-50 px-1.5 py-0.5 text-xs font-medium text-blue-700 dark:bg-blue-900/40 dark:text-blue-300">{t("Manual plan label").replace("{plan}", t(manualPlanLabel))}</span>
+            )}
+          </div>
+        )}
+        {account.email && (
+          <p role="status" className={emailCopy === "failed" && !masked ? "text-xs text-amber-700 dark:text-amber-300" : "sr-only"}>
+            {!masked && (emailCopy === "copied" ? t("Copied") : emailCopy === "failed" ? t("Clipboard unavailable. Please copy manually.") : null)}
+          </p>
+        )}
+      </header>
 
-        <div className="flex max-w-[60%] flex-wrap items-center justify-end gap-2">
-          {/* Eye toggle */}
-          {onToggleMask && (
-            <button
-              disabled={readOnly}
-              onClick={onToggleMask}
-              className="p-1 text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-              title={masked ? t("Show info") : t("Hide info")}
-            >
-              {masked ? (
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21" />
-                </svg>
-              ) : (
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
-                </svg>
-              )}
-            </button>
-          )}
-          {/* Plan badge */}
-          <span
-            className={`px-2.5 py-1 text-xs font-medium rounded-full border ${planColorClass}`}
-          >
-            {planDisplay}
-          </span>
-          <ResetCreditsMenu
-            compact={compactResetCredits}
-            resetCredits={resetCredits}
-          />
+      {editablePlan && editingPlan && (
+        <div className="mb-3 rounded-lg border border-gray-200 p-3 text-sm dark:border-gray-700">
+          <label className="flex flex-wrap items-center gap-2">
+            {t("Display plan")}
+            <select disabled={savingPlan} value={manualPlan ?? ""}
+              onChange={event => void saveDisplayPlan(event.target.value || null)}
+              className="rounded-md border border-gray-300 bg-white px-2 py-1 dark:border-gray-600 dark:bg-gray-900">
+              <option value="">{t("Detect plan automatically")}</option>
+              {DISPLAY_PLANS.map(([value, label]) => <option key={value} value={value}>{t(label)}</option>)}
+            </select>
+          </label>
+          {planSaveFailed && <p role="alert" className="mt-2 text-xs text-red-600 dark:text-red-400">{t("Could not save display plan")}</p>}
         </div>
-      </div>
+      )}
 
       <section className="mb-4 min-w-0 rounded-xl bg-gray-50 p-3 dark:bg-gray-950/40">
         <h4 className="mb-3 text-xs font-medium text-gray-500 dark:text-gray-400">{locale === "zh-CN" ? "账号额度" : "Allowance"}</h4>

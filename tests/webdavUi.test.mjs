@@ -221,10 +221,11 @@ test("pay-as-you-go team cards use the unavailable styling and actions while all
   await act(async () => root.render(createElement(AccountCard, { account, onSwitch(){}, onRelogin(){}, onWarmup:async()=>{}, onDelete(){}, onExport(){},
     onRefresh:async()=>{ refreshes.push(account.id); }, onRename:async()=>{} })));
   assert.ok(document.querySelector('[class~="border-red-500"]'));
-  assert.ok([...document.querySelectorAll('span')].some(span => span.textContent === 'team'));
-  assert.ok(document.querySelector('[class~="text-red-700"]').textContent.includes('团队按量付费'));
-  assert.doesNotMatch(document.body.textContent, /登录已失效|暂停自动刷新|额度刷新失败/);
-  assert.match(document.querySelector('[role="status"]').textContent, /^显示上次成功获取的额度 · 记录时间:/);
+  const [titleRow, detailsRow] = document.querySelector("header").children;
+  assert.ok([...titleRow.querySelectorAll("span")].some(span => span.textContent === "team"));
+  assert.match(detailsRow.textContent, /登录已失效.*团队按量付费/);
+  assert.doesNotMatch(document.body.textContent, /暂停自动刷新|额度刷新失败/);
+  assert.match(document.querySelector('section [role="status"]').textContent, /^显示上次成功获取的额度 · 记录时间:/);
   assert.ok(button("重新登录"));
   assert.equal(document.querySelector('[aria-label="手动预热"]').disabled, true);
   const refresh = document.querySelector('[aria-label="刷新用量"]');

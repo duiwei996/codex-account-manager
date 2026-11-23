@@ -1119,6 +1119,10 @@ function App() {
                         refreshSingleUsage(account.id, { refreshMetadata: true, manual: true })
                       }
                       onRename={(newName) => renameAccount(account.id, newName)}
+                      onChangeDisplayPlan={async (displayPlan) => {
+                        await invokeBackend("set_account_display_plan", { accountId: account.id, displayPlan });
+                        await loadAccounts(true);
+                      }}
                       switching={switchingId === account.id}
                       switchDisabled={switchingId !== null || isForceClosingCodex}
                       codexRunning={hasRunningProcesses ?? false}
